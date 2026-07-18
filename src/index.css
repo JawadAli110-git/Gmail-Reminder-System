@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@layer base {
+  body {
+    @apply antialiased text-slate-900 bg-slate-50 transition-colors duration-500 ease-in-out;
+    font-family: var(--font-sans);
+  }
+  
+  .dark body {
+    @apply text-slate-50 bg-slate-950;
+  }
+}
+
+.liquid-glass {
+  @apply bg-white/60 dark:bg-black/40 backdrop-blur-xl border border-white/20 dark:border-white/10 shadow-[0_8px_32px_0_rgba(31,38,135,0.07)] dark:shadow-[0_8px_32px_0_rgba(0,0,0,0.3)];
+}
+
+.liquid-glass-heavy {
+  @apply bg-white/70 dark:bg-black/60 backdrop-blur-2xl border border-white/30 dark:border-white/20 shadow-xl;
+}
+
+
+@media print {
+  @page { margin: 1cm; }
+  body {
+    background: white !important;
+    color: black !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  .no-print, button, form {
+    display: none !important;
+  }
+  .liquid-glass, .liquid-glass-heavy {
+    background: white !important;
+    backdrop-filter: none !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    color: black !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .text-slate-900, .text-slate-700, .text-slate-500, .dark\:text-white, .dark\:text-slate-300 {
+    color: #0f172a !important;
+  }
+  .printable-header {
+    margin-bottom: 24px !important;
+  }
+  .fixed, .absolute {
+    display: none !important;
+  }
+  /* Show only printable content */
+  #timetable-content {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+}
