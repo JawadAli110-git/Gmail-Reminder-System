@@ -41,6 +41,7 @@ export default function App() {
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   
   const [formData, setFormData] = useState<Partial<TimetableEntry>>({ days: ["Daily"] });
+  const [additionalSessions, setAdditionalSessions] = useState<{day: string, time: string, endTime?: string}[]>([]);
   const [classFormData, setClassFormData] = useState({ name: "" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
@@ -160,13 +161,9 @@ export default function App() {
         return (typeof ta === 'number' && typeof tb === 'number') ? ta - tb : a.localeCompare(b);
       });
 
+      const skipCells: Record<string, number> = {};
+      
       const tableData = timesArray.map((time, rowIndex) => {
-        let endTimeStr = "";
-        const entryWithTime = classEntries.find(e => e.time === time && e.endTime);
-        const examWithTime = classExams.find(e => e.time === time && e.endTime);
-        if (entryWithTime?.endTime) endTimeStr = entryWithTime.endTime;
-        else if (examWithTime?.endTime) endTimeStr = examWithTime.endTime;
-        
         let timeText = formatTimeAmPm(time);
         const rowData: any[] = [{ content: timeText, styles: { cellWidth: 28 } }];
         daysOfWeek.forEach(day => {
@@ -188,10 +185,29 @@ export default function App() {
               });
             }
           } else {
+            if (skipCells[day] > 0) {
+              skipCells[day]--;
+              return;
+            }
+            
             let cellText = "";
+            let maxRowSpan = 1;
+            
             const dayEntries = classEntries.filter(e => e.time === time && (e.days?.includes(day) || e.days?.includes('Daily')));
             if (dayEntries.length > 0) {
               cellText += dayEntries.map(e => e.subject.toUpperCase()).join("\n");
+              const entryWithEnd = dayEntries.find(e => e.endTime);
+              if (entryWithEnd) {
+                  let span = 1;
+                  for (let i = rowIndex + 1; i < timesArray.length; i++) {
+                      if (timesArray[i] < entryWithEnd.endTime) {
+                          span++;
+                      } else {
+                          break;
+                      }
+                  }
+                  maxRowSpan = Math.max(maxRowSpan, span);
+              }
             }
             
             const dayExams = classExams.filter(e => {
@@ -204,10 +220,34 @@ export default function App() {
             if (dayExams.length > 0) {
               if (cellText) cellText += "\n";
               cellText += dayExams.map(e => `[EXAM]\n${e.subject.toUpperCase()}`).join("\n");
+              const examWithEnd = dayExams.find(e => e.endTime);
+              if (examWithEnd) {
+                  let span = 1;
+                  for (let i = rowIndex + 1; i < timesArray.length; i++) {
+                      if (timesArray[i] < examWithEnd.endTime) {
+                          span++;
+                      } else {
+                          break;
+                      }
+                  }
+                  maxRowSpan = Math.max(maxRowSpan, span);
+              }
             }
             
-            if (!cellText) cellText = "-";
-            rowData.push(cellText);
+            if (!cellText) {
+              rowData.push("-");
+            } else {
+              if (maxRowSpan > 1) {
+                  rowData.push({
+                      content: cellText,
+                      rowSpan: maxRowSpan,
+                      styles: { halign: 'center', valign: 'middle' }
+                  });
+                  skipCells[day] = maxRowSpan - 1;
+              } else {
+                  rowData.push(cellText);
+              }
+            }
           }
         });
         return rowData;
@@ -560,9 +600,33 @@ export default function App() {
         showToast("Scheduling Conflict", result.error || "Failed to schedule class.", "error");
         triggerHapticError();
       } else {
+        if (!editingId && additionalSessions.length > 0) {
+            for (const session of additionalSessions) {
+               if (!session.time) continue;
+               const sessionData = {
+                  ...formData,
+                  classId: selectedClassId,
+                  id: Date.now().toString() + Math.random().toString(),
+                  days: [session.day],
+                  time: session.time,
+                  endTime: session.endTime
+               };
+               const sessionRes = await fetch("/api/timetable", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(sessionData)
+               });
+               const sessionResult = await sessionRes.json();
+               if (!sessionRes.ok) {
+                   showToast("Scheduling Conflict", `Failed to schedule extra class on ${session.day}. ${sessionResult.error}`, "error");
+               }
+            }
+        }
+
         triggerHapticSuccess();
         setIsFormOpen(false);
         setFormData({ days: ["Daily"] });
+        setAdditionalSessions([]);
         setEditingId(null);
         showToast("Success", editingId ? "Class updated." : "Class added.", "success");
         await fetchEntries();
@@ -605,6 +669,7 @@ export default function App() {
     triggerHaptic();
     setFormData(entry);
     setEditingId(entry.id);
+    setAdditionalSessions([]);
     setIsFormOpen(true);
   };
 
@@ -743,6 +808,7 @@ export default function App() {
                   triggerHaptic();
                   setEditingId(null);
                   setFormData({});
+                  setAdditionalSessions([]);
                   setIsFormOpen(true);
                 }}
                 className="flex items-center gap-2 px-5 py-3 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shrink-0 ml-auto md:ml-0"
@@ -1043,6 +1109,93 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                  
+                  {/* Additional Sessions */}
+                  {!editingId && additionalSessions.map((session, index) => (
+                    <div key={index} className="pt-4 mt-4 border-t border-slate-100 dark:border-white/5 relative">
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          const newSessions = [...additionalSessions];
+                          newSessions.splice(index, 1);
+                          setAdditionalSessions(newSessions);
+                        }}
+                        className="absolute right-0 top-4 text-red-500 hover:text-red-600"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 ml-1">Additional Schedule {index + 1}</label>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 ml-1">Day</label>
+                          <div className="relative">
+                            <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <select
+                              required
+                              value={session.day}
+                              onChange={e => {
+                                const newSessions = [...additionalSessions];
+                                newSessions[index].day = e.target.value;
+                                setAdditionalSessions(newSessions);
+                              }}
+                              className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white appearance-none"
+                            >
+                              <option value="Monday">Monday</option>
+                              <option value="Tuesday">Tuesday</option>
+                              <option value="Wednesday">Wednesday</option>
+                              <option value="Thursday">Thursday</option>
+                              <option value="Friday">Friday</option>
+                              <option value="Saturday">Saturday</option>
+                              <option value="Sunday">Sunday</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 ml-1">Start Time</label>
+                          <div className="relative">
+                            <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              required type="time"
+                              value={session.time}
+                              onChange={e => {
+                                const newSessions = [...additionalSessions];
+                                newSessions[index].time = e.target.value;
+                                setAdditionalSessions(newSessions);
+                              }}
+                              className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1 ml-1">End Time</label>
+                          <div className="relative">
+                            <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input type="time"
+                              value={session.endTime || ""}
+                              onChange={e => {
+                                const newSessions = [...additionalSessions];
+                                newSessions[index].endTime = e.target.value;
+                                setAdditionalSessions(newSessions);
+                              }}
+                              className="w-full pl-9 pr-3 py-2 rounded-xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {!editingId && (
+                    <button
+                      type="button"
+                      onClick={() => setAdditionalSessions([...additionalSessions, { day: "Monday", time: "" }])}
+                      className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+                    >
+                      <Plus size={16} /> Add another day/time for this class
+                    </button>
+                  )}
                 </div>
 
                 <div>
