@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Plus, Trash2, Edit2, Moon, Sun, Clock, BookOpen, User, Mail, Sparkles, Activity, GraduationCap, Calendar, Download, Printer, List, Calendar as CalendarIcon, FileText } from "lucide-react";
 import { Chatbot } from "./components/Chatbot";
 import { ExamForm } from "./components/ExamForm";
+import { TimetablePreview } from "./components/TimetablePreview";
 
 export const formatTimeAmPm = (time24?: string) => {
   if (!time24) return "";
@@ -945,6 +946,14 @@ export default function App() {
               </>
             ) : (
               <>
+                <div className="mb-12">
+                  <h3 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Timetable Preview</h3>
+                  <TimetablePreview 
+                    classEntries={entries.filter(e => e.classId === selectedClassId)}
+                    classExams={exams.filter(e => !selectedClassId || e.classId === selectedClassId)}
+                  />
+                </div>
+                <h3 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">All Entries</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <AnimatePresence>
                     {entries.filter(e => e.classId === selectedClassId).map((entry, idx) => (
