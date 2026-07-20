@@ -637,7 +637,7 @@ export default function App() {
   }, {} as Record<string, TimetableEntry[]>);
 
   return (
-    <div className="min-h-screen relative pb-32 text-slate-900 dark:text-slate-50">
+    <div className="min-h-screen relative pb-32 text-slate-900 dark:text-slate-50 bg-slate-50 dark:bg-slate-950 transition-colors duration-500">
       {/* Background gradients for Liquid Glass effect */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-blue-400/20 dark:bg-blue-600/20 blur-[100px] transition-all duration-1000" />
@@ -919,6 +919,18 @@ export default function App() {
                             <Mail size={14} className="opacity-70 text-slate-900 dark:text-slate-100" />
                             <span className="truncate text-slate-800 dark:text-slate-200">{entry.teacherEmail}</span>
                           </div>
+                          {entry.taName && (
+                            <div className="flex items-center gap-2 border-t border-slate-200 dark:border-slate-800 pt-2 mt-2">
+                              <User size={14} className="opacity-70 text-slate-900 dark:text-slate-100" />
+                              <span className="font-medium text-slate-900 dark:text-slate-100">TA: {entry.taName}</span>
+                            </div>
+                          )}
+                          {entry.taEmail && (
+                            <div className="flex items-center gap-2">
+                              <Mail size={14} className="opacity-70 text-slate-900 dark:text-slate-100" />
+                              <span className="truncate text-slate-800 dark:text-slate-200">{entry.taEmail}</span>
+                            </div>
+                          )}
                         </div>
                       </motion.div>
                     ))}
@@ -1057,6 +1069,33 @@ export default function App() {
                       placeholder="teacher@school.edu"
                     />
                   </div>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">TA Name (Optional)</label>
+                      <div className="relative">
+                        <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          type="text"
+                          value={formData.taName || ""} onChange={e => setFormData({...formData, taName: e.target.value})}
+                          className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                          placeholder="e.g. Jane Doe"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">TA Email (Optional)</label>
+                      <div className="relative">
+                        <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          type="email"
+                          value={formData.taEmail || ""} onChange={e => setFormData({...formData, taEmail: e.target.value})}
+                          className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                          placeholder="ta@school.edu"
+                        />
+                      </div>
+                    </div>
                 </div>
 
                 <div className="pt-2 flex gap-3">

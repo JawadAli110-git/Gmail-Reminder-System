@@ -5,6 +5,8 @@ export interface TimetableEntry {
   time: string;
   endTime?: string;
   teacherEmail: string;
+  taName?: string;
+  taEmail?: string;
   days: string[];
   grade?: string;
   classId: string;
@@ -20,6 +22,8 @@ export interface EmailLog {
   id: string;
   timestamp: string;
   teacherEmail: string;
+  taName?: string;
+  taEmail?: string;
   subject: string;
   status: 'success' | 'error';
   details?: string;
