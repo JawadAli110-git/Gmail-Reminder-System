@@ -46,7 +46,7 @@ export default function App() {
   const [classFormData, setClassFormData] = useState({ name: "" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{type: 'class' | 'entry' | 'exam', id: string} | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{type: 'class' | 'entry' | 'exam' | 'allRecords' | 'allGlobalExams', id: string} | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSubmittingClass, setIsSubmittingClass] = useState(false);
@@ -366,7 +366,7 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 5000);
   };
 
-  const [reminderOffset, setReminderOffset] = useState<number>(15);
+  const [reminderOffset, setReminderOffset] = useState<number>(180);
 
   const fetchSettings = async () => {
     try {
@@ -479,6 +479,29 @@ export default function App() {
       await fetchEntries();
       if (selectedClassId === id) setSelectedClassId(null);
       setDeleteConfirm(null);
+    } catch (err) {
+      triggerHapticError();
+    }
+  };
+  
+  const confirmDeleteAllRecords = async (classId: string) => {
+    try {
+      await fetch(`/api/classes/${classId}/records`, { method: "DELETE" });
+      await fetchEntries();
+      await fetchExams();
+      setDeleteConfirm(null);
+      showToast("Success", "All records deleted for this class.", "success");
+    } catch (err) {
+      triggerHapticError();
+    }
+  };
+  
+  const confirmDeleteAllGlobalExams = async () => {
+    try {
+      await fetch(`/api/exams/all`, { method: "DELETE" });
+      await fetchExams();
+      setDeleteConfirm(null);
+      showToast("Success", "All scheduled papers deleted.", "success");
     } catch (err) {
       triggerHapticError();
     }
@@ -774,13 +797,11 @@ export default function App() {
                 value={reminderOffset}
                 onChange={(e) => updateSettings(Number(e.target.value))}
                 className="bg-transparent text-sm font-medium text-slate-700 dark:text-slate-300 focus:outline-none appearance-none cursor-pointer"
-                title="Reminder Time"
+                title="2nd Reminder Time"
               >
-                <option value={5}>5m before</option>
-                <option value={10}>10m before</option>
-                <option value={15}>15m before</option>
-                <option value={30}>30m before</option>
-                <option value={60}>1h before</option>
+                <option value={180}>3h before</option>
+                <option value={240}>4h before</option>
+                <option value={300}>5h before</option>
               </select>
             </div>
 
@@ -804,19 +825,32 @@ export default function App() {
             </button>
 
             {selectedClassId ? (
-              <button
-                onClick={() => {
-                  triggerHaptic();
-                  setEditingId(null);
-                  setFormData({});
-                  setAdditionalSessions([]);
-                  setIsFormOpen(true);
-                }}
-                className="flex items-center gap-2 px-5 py-3 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shrink-0 ml-auto md:ml-0"
-              >
-                <Plus size={18} />
-                <span className="hidden sm:inline">Add Entry</span>
-              </button>
+              <div className="flex gap-2 ml-auto md:ml-0">
+                <button
+                  onClick={() => {
+                    triggerHaptic();
+                    setDeleteConfirm({ type: 'allRecords', id: selectedClassId });
+                  }}
+                  className="flex items-center gap-2 px-5 py-3 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shrink-0"
+                  title="Delete All Records"
+                >
+                  <Trash2 size={18} />
+                  <span className="hidden sm:inline">Clear All</span>
+                </button>
+                <button
+                  onClick={() => {
+                    triggerHaptic();
+                    setEditingId(null);
+                    setFormData({});
+                    setAdditionalSessions([]);
+                    setIsFormOpen(true);
+                  }}
+                  className="flex items-center gap-2 px-5 py-3 rounded-full bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg shrink-0"
+                >
+                  <Plus size={18} />
+                  <span className="hidden sm:inline">Add Entry</span>
+                </button>
+              </div>
             ) : (
               <button
                 onClick={() => {
@@ -887,9 +921,22 @@ export default function App() {
                 {/* Global Exams Section */}
                 {exams.length > 0 && (
                   <div className="mt-16">
-                    <div className="flex items-center gap-3 mb-8">
-                      <FileText className="text-red-500" size={24} />
-                      <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Scheduled Papers</h2>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                      <div className="flex items-center gap-3">
+                        <FileText className="text-red-500" size={24} />
+                        <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Scheduled Papers</h2>
+                      </div>
+                      <button
+                        onClick={() => {
+                          triggerHaptic();
+                          setDeleteConfirm({ type: 'allGlobalExams', id: 'global' });
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg w-fit"
+                        title="Delete All Scheduled Papers"
+                      >
+                        <Trash2 size={18} />
+                        <span className="hidden sm:inline">Clear All</span>
+                      </button>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       <AnimatePresence>
@@ -1346,11 +1393,14 @@ export default function App() {
                 <Trash2 size={32} />
               </div>
               <h2 className="text-xl font-bold tracking-tight mb-2">
-                Delete {deleteConfirm.type === 'class' ? 'Class' : 'Entry'}?
+                Delete {deleteConfirm.type === 'class' ? 'Class' : deleteConfirm.type === 'exam' ? 'Exam' : deleteConfirm.type === 'allRecords' ? 'All Records' : deleteConfirm.type === 'allGlobalExams' ? 'All Papers' : 'Entry'}?
               </h2>
               <p className="text-slate-600 dark:text-slate-400 mb-6">
                 {deleteConfirm.type === 'class' 
                   ? "Are you sure you want to delete this class? All of its schedule entries will also be permanently deleted."
+                  : deleteConfirm.type === 'exam' ? "Are you sure you want to delete this exam?" 
+                  : deleteConfirm.type === 'allRecords' ? "Are you sure you want to delete all scheduled entries and exams for this class? This action cannot be undone."
+                  : deleteConfirm.type === 'allGlobalExams' ? "Are you sure you want to delete all scheduled papers? This action cannot be undone."
                   : "Are you sure you want to delete this scheduled class entry?"}
               </p>
 
@@ -1365,6 +1415,8 @@ export default function App() {
                   onClick={() => {
                     if (deleteConfirm.type === 'class') confirmDeleteClass(deleteConfirm.id);
                     else if (deleteConfirm.type === 'entry') confirmDeleteEntry(deleteConfirm.id);
+                    else if (deleteConfirm.type === 'allRecords') confirmDeleteAllRecords(deleteConfirm.id);
+                    else if (deleteConfirm.type === 'allGlobalExams') confirmDeleteAllGlobalExams();
                     else confirmDeleteExam(deleteConfirm.id);
                   }} 
                   className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-red-600 text-white shadow-md hover:scale-[1.02] active:scale-[0.98] transition-transform hover:bg-red-700"

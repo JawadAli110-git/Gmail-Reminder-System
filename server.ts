@@ -92,48 +92,71 @@ const transporter = nodemailer.createTransport({
 cron.schedule("* * * * *", async () => {
   const now = new Date();
   
-  // Use Asia/Karachi timezone for the user (UTC+5)
-  const options = { timeZone: "Asia/Karachi", hour: "2-digit", minute: "2-digit", hour12: false } as const;
-  const timeString = now.toLocaleTimeString("en-US", options);
+  // Create a formatter for Karachi time
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  });
   
-  // timeString might be "14:30" or "24:30" (which is 00:30), let's parse safely
-  const [hourStr, minuteStr] = timeString.split(":");
-  let currentHours = hourStr;
-  if (currentHours === "24") currentHours = "00";
-  const currentTime = `${currentHours}:${minuteStr}`;
-  
-  const currentDay = now.toLocaleDateString("en-US", { weekday: "long", timeZone: "Asia/Karachi" });
+  // We don't parse a string to a new Date object, we just calculate targets
+  // in milliseconds and then format them to Karachi time.
+  const getKarachiInfo = (dateObj: Date) => {
+      const parts = formatter.formatToParts(dateObj);
+      const get = (type: string) => parts.find(p => p.type === type)?.value;
+      const y = get('year');
+      const m = get('month');
+      const d = get('day');
+      const hr = parseInt(get('hour') || '0');
+      const min = parseInt(get('minute') || '0');
+      // Fix 24 to 0
+      const hrAdjusted = hr === 24 ? 0 : hr;
+      
+      const dateISO = `${y}-${m}-${d}`;
+      const timeMins = hrAdjusted * 60 + min;
+      
+      const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+      // To get weekday in Karachi:
+      const weekdayStr = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Karachi', weekday: 'long' }).format(dateObj);
+      
+      return { dateISO, timeMins, weekdayStr };
+  };
 
   const settings = await getSettings();
-  const offset = settings.reminderOffset || 15;
+  const offset = settings.reminderOffset || 180; // default 3 hours
+  const targets = Array.from(new Set([60, offset])); // 1 hour and user-defined offset
+
   const timetable = await getTimetable();
-  for (const entry of timetable) {
-    const entryStart = parseTime(entry.time);
-    const currentMins = parseTime(currentTime);
-    if (entryStart - currentMins === offset && (entry.days.includes(currentDay) || entry.days.includes("Daily"))) {
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
-        console.error("Cron Error: EMAIL_USER or EMAIL_APP_PASSWORD not set in .env");
-        continue;
-      }
-      try {
-        const mailOptions = {
-          from: process.env.EMAIL_USER,
-          to: entry.teacherEmail,
-          subject: `Reminder: Upcoming Class - ${entry.subject}`,
-          text: `Dear ${entry.teacherName},\n\nThis is an automated reminder that your class for ${entry.subject} is starting at ${formatTimeAmPm(entry.time)}.\n\nBest regards,\nAdmin System`,
-        };
-        await transporter.sendMail(mailOptions);
-        console.log(`Reminder sent successfully to ${entry.teacherEmail}`);
-        emailLogs.unshift({
-          id: Date.now().toString() + Math.random().toString(),
-          timestamp: new Date().toISOString(),
-          teacherEmail: entry.teacherEmail,
-          subject: entry.subject,
-          status: 'success'
-        });
+  const exams = await getExams();
+
+  for (const t of targets) {
+    const targetDate = new Date(now.getTime() + t * 60000);
+    const targetInfo = getKarachiInfo(targetDate);
+    
+    // Check Timetable
+    for (const entry of timetable) {
+      const entryStart = parseTime(entry.time);
+      if (entryStart === targetInfo.timeMins && (entry.days.includes(targetInfo.weekdayStr) || entry.days.includes("Daily"))) {
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) continue;
         
-        // TA Reminder
-        if (entry.taEmail && entry.taName) {
+        try {
+          const mailOptions = {
+            from: process.env.EMAIL_USER,
+            to: entry.teacherEmail,
+            subject: `Reminder: Upcoming Class - ${entry.subject}`,
+            text: `Dear ${entry.teacherName},\n\nThis is an automated reminder that your class for ${entry.subject} is starting at ${formatTimeAmPm(entry.time)}.\n\nBest regards,\nAdmin System`,
+          };
+          await transporter.sendMail(mailOptions);
+          emailLogs.unshift({
+            id: Date.now().toString() + Math.random().toString(),
+            timestamp: new Date().toISOString(),
+            teacherEmail: entry.teacherEmail,
+            subject: entry.subject,
+            status: 'success'
+          });
+          
+          if (entry.taEmail && entry.taName) {
             try {
               const taMailOptions = {
                 from: process.env.EMAIL_USER,
@@ -142,7 +165,6 @@ cron.schedule("* * * * *", async () => {
                 text: `Dear ${entry.taName},\n\nThis is an automated reminder that your TA duty for ${entry.subject} with ${entry.teacherName} is starting at ${formatTimeAmPm(entry.time)}.\n\nBest regards,\nAdmin System`,
               };
               await transporter.sendMail(taMailOptions);
-              console.log(`Reminder sent successfully to TA ${entry.taEmail}`);
               emailLogs.unshift({
                 id: Date.now().toString() + Math.random().toString(),
                 timestamp: new Date().toISOString(),
@@ -150,73 +172,68 @@ cron.schedule("* * * * *", async () => {
                 subject: entry.subject,
                 status: 'success'
               });
-            } catch (taError) {
-              console.error(`Failed to send TA reminder to ${entry.taEmail}:`, taError);
+            } catch (taError: any) {
               emailLogs.unshift({
                 id: Date.now().toString() + Math.random().toString(),
                 timestamp: new Date().toISOString(),
                 teacherEmail: entry.taEmail + " (TA)",
                 subject: entry.subject,
                 status: 'error',
-                details: taError.message || "Failed"
+                details: taError.message
               });
             }
-        }
-      } catch (error: any) {
-        console.error(`Failed to send reminder to ${entry.teacherEmail}:`, error);
-        emailLogs.unshift({
-          id: Date.now().toString() + Math.random().toString(),
-          timestamp: new Date().toISOString(),
-          teacherEmail: entry.teacherEmail,
-          subject: entry.subject,
-          status: 'error',
-          details: error.message
-        });
-      }
-      
-      // Keep only last 50 logs
-      if (emailLogs.length > 50) emailLogs = emailLogs.slice(0, 50);
-    }
-  }
-
-  // Check exams
-  const currentDateISO = now.toLocaleDateString("en-CA", { timeZone: "Asia/Karachi" }); // YYYY-MM-DD
-  const exams = await getExams();
-  for (const exam of exams) {
-    if (exam.date === currentDateISO && exam.time === currentTime) {
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) continue;
-      
-      for (const invigilator of exam.invigilators || []) {
-        try {
-          const mailOptions = {
-            from: process.env.EMAIL_USER,
-            to: invigilator.email,
-            subject: `Reminder: Invigilation Duty - ${exam.subject}`,
-            text: `Dear ${invigilator.name},\n\nThis is an automated reminder that you have an invigilation duty for ${exam.subject} starting at ${formatTimeAmPm(exam.time)}.\n\nBest regards,\nAdmin System`,
-          };
-          await transporter.sendMail(mailOptions);
-          emailLogs.unshift({
-            id: Date.now().toString() + Math.random().toString(),
-            timestamp: new Date().toISOString(),
-            teacherEmail: invigilator.email,
-            subject: exam.subject + " (Exam)",
-            status: 'success'
-          });
+          }
         } catch (error: any) {
-          console.error(`Failed to send exam reminder to ${invigilator.email}:`, error);
           emailLogs.unshift({
             id: Date.now().toString() + Math.random().toString(),
             timestamp: new Date().toISOString(),
-            teacherEmail: invigilator.email,
-            subject: exam.subject + " (Exam)",
+            teacherEmail: entry.teacherEmail,
+            subject: entry.subject,
             status: 'error',
             details: error.message
           });
         }
       }
-      if (emailLogs.length > 50) emailLogs = emailLogs.slice(0, 50);
+    }
+
+    // Check Exams
+    for (const exam of exams) {
+      const examStart = parseTime(exam.time);
+      if (exam.date === targetInfo.dateISO && examStart === targetInfo.timeMins) {
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) continue;
+        
+        for (const invigilator of exam.invigilators || []) {
+          try {
+            const mailOptions = {
+              from: process.env.EMAIL_USER,
+              to: invigilator.email,
+              subject: `Reminder: Invigilation Duty - ${exam.subject}`,
+              text: `Dear ${invigilator.name},\n\nThis is an automated reminder that you have an invigilation duty for ${exam.subject} starting at ${formatTimeAmPm(exam.time)}.\n\nBest regards,\nAdmin System`,
+            };
+            await transporter.sendMail(mailOptions);
+            emailLogs.unshift({
+              id: Date.now().toString() + Math.random().toString(),
+              timestamp: new Date().toISOString(),
+              teacherEmail: invigilator.email,
+              subject: exam.subject + " (Exam)",
+              status: 'success'
+            });
+          } catch (error: any) {
+            emailLogs.unshift({
+              id: Date.now().toString() + Math.random().toString(),
+              timestamp: new Date().toISOString(),
+              teacherEmail: invigilator.email,
+              subject: exam.subject + " (Exam)",
+              status: 'error',
+              details: error.message
+            });
+          }
+        }
+      }
     }
   }
+
+  if (emailLogs.length > 50) emailLogs = emailLogs.slice(0, 50);
 });
 
 
@@ -244,6 +261,30 @@ app.post("/api/classes", async (req, res) => {
   const newId = id || Date.now().toString();
   await setDoc(doc(db, "classes", newId), { name });
   res.json({ success: true });
+});
+
+
+app.delete("/api/classes/:id/records", async (req, res) => {
+  const { id } = req.params;
+  try {
+    // Delete all timetable entries for this class
+    const timetableSnap = await getDocs(collection(db, "timetable"));
+    const timetableDocs = timetableSnap.docs.filter(d => d.data().classId === id);
+    for (const doc of timetableDocs) {
+      await deleteDoc(doc.ref);
+    }
+    
+    // Delete all exams for this class
+    const examsSnap = await getDocs(collection(db, "exams"));
+    const examsDocs = examsSnap.docs.filter(d => d.data().classId === id);
+    for (const doc of examsDocs) {
+      await deleteDoc(doc.ref);
+    }
+    
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.delete("/api/classes/:id", async (req, res) => {
@@ -417,6 +458,19 @@ app.put("/api/exams/:id", async (req, res) => {
 
   await updateDoc(doc(db, "exams", id), updateData);
   res.json({ success: true });
+});
+
+
+app.delete("/api/exams/all", async (req, res) => {
+  try {
+    const examsSnap = await getDocs(collection(db, "exams"));
+    for (const doc of examsSnap.docs) {
+      await deleteDoc(doc.ref);
+    }
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.delete("/api/exams/:id", async (req, res) => {
