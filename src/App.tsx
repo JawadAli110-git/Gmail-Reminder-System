@@ -37,7 +37,8 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     headers.set('Authorization', `Bearer ${token}`);
   }
   const response = await window.fetch(input, { ...init, headers });
-  if (response.status === 401 && !input.toString().includes('/api/auth/login')) {
+  const urlString = typeof input === 'string' ? input : (input instanceof Request ? input.url : input.toString());
+  if (response.status === 401 && !urlString.includes('/api/auth/login')) {
     localStorage.removeItem('adminToken');
     window.location.href = '/';
     return new Promise(() => {});
@@ -1820,7 +1821,7 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-sm max-h-[95vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white"
+              className="relative w-full max-w-sm max-h-[85vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-5 sm:p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white flex flex-col"
             >
               <div className="w-16 h-16 mx-auto mb-6 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center">
                 {authMode === 'login' ? <Lock size={32} /> : <KeyRound size={32} />}

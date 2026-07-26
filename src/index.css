@@ -9,6 +9,7 @@
 
 @layer base {
   body {
+    @apply select-none;
     @apply antialiased text-slate-900 bg-slate-50 dark:text-slate-50 dark:bg-slate-950 transition-colors duration-500 ease-in-out;
     font-family: var(--font-sans);
   }
@@ -58,4 +59,8 @@
     margin: 0 !important;
     max-width: none !important;
   }
+}
+
+input, textarea {
+  @apply select-text;
 }
