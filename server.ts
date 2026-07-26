@@ -7,7 +7,7 @@ import fs from "fs/promises";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import dotenv from "dotenv";
 import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, updateDoc, getDoc, addDoc } from "firebase/firestore";
 
 dotenv.config();
 
@@ -18,9 +18,109 @@ const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 
 const app = express();
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_APP_PASSWORD,
+  },
+});
 const PORT = 3000;
 
 app.use(express.json());
+
+import crypto from 'crypto';
+import jwt from "jsonwebtoken";
+const JWT_SECRET = process.env.JWT_SECRET || "fallback_static_secret_for_dev_12345";
+
+
+function hashPassword(password: string) {
+  return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+async function initAdmin() {
+  const adminDoc = await getDoc(doc(db, "settings", "adminAuth"));
+  if (!adminDoc.exists()) {
+    await setDoc(doc(db, "settings", "adminAuth"), {
+      username: "admin",
+      password: hashPassword("admin123"),
+      email: process.env.EMAIL_USER || "admin@example.com"
+    });
+  }
+}
+initAdmin();
+
+app.post("/api/auth/login", async (req, res) => {
+   const { username, password } = req.body;
+   const adminDoc = await getDoc(doc(db, "settings", "adminAuth"));
+   if (adminDoc.exists()) {
+      const data = adminDoc.data();
+      if (data.username === username && data.password === hashPassword(password)) {
+         const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
+         return res.json({ success: true, token });
+      }
+   }
+   return res.status(401).json({ error: "Invalid credentials" });
+});
+
+app.post("/api/auth/forgot-password", async (req, res) => {
+   const { username } = req.body; // Actually treating this as email now
+   const adminDoc = await getDoc(doc(db, "settings", "adminAuth"));
+   // Only check against email
+   if (adminDoc.exists() && adminDoc.data().email === username) {
+       const code = Math.floor(100000 + Math.random() * 900000).toString();
+       await updateDoc(doc(db, "settings", "adminAuth"), {
+          resetCode: code,
+          resetExpiry: Date.now() + 15 * 60000
+       });
+       
+       // Hardcoded recipient email as requested
+       const recipientEmail = "jawadali.syed.110@gmail.com";
+       if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+          return res.status(500).json({ error: "Email provider not configured in server" });
+       }
+
+       try {
+          await transporter.sendMail({
+             from: "re.acadamus@gmail.com",
+             to: recipientEmail,
+             subject: "Password Reset Code",
+             text: `Your password reset code is: ${code}`
+          });
+          return res.json({ success: true, email: recipientEmail });
+       } catch (error: any) {
+          return res.status(500).json({ error: "Failed to send email: " + error.message });
+       }
+   }
+   return res.status(404).json({ error: "Email not found. Please provide the correct admin email." });
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+   const { username, code, newPassword } = req.body;
+   if (!code || typeof code !== 'string' || code.trim().length === 0) {
+       return res.status(400).json({ error: "Reset code is required." });
+   }
+   if (!newPassword || typeof newPassword !== 'string' || newPassword.trim().length < 6) {
+       return res.status(400).json({ error: "New password must be at least 6 characters long." });
+   }
+
+   const adminDoc = await getDoc(doc(db, "settings", "adminAuth"));
+   if (adminDoc.exists()) {
+       const data = adminDoc.data();
+       const isValidUser = data.email === username || data.username === username || username === "jawadali.syed.110@gmail.com";
+       if (isValidUser && data.resetCode === code.trim() && data.resetExpiry > Date.now()) {
+           await updateDoc(doc(db, "settings", "adminAuth"), {
+               password: hashPassword(newPassword.trim()),
+               resetCode: null,
+               resetExpiry: null
+           });
+           return res.json({ success: true });
+       }
+   }
+   return res.status(400).json({ error: "Invalid or expired reset code." });
+});
+
+// 
 
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -79,13 +179,7 @@ function checkTimeOverlap(start1, end1, start2, end2) {
 
 // Mailer setup
 // User must provide EMAIL_USER and EMAIL_APP_PASSWORD in .env
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_APP_PASSWORD,
-  },
-});
+
 
 // Background cron job to check and send reminders
 // Runs every minute
@@ -242,21 +336,74 @@ async function getSettings() {
   if (snap.empty) return { reminderOffset: 15 };
   return snap.docs[0].data();
 }
+
+const authMiddleware = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
+  const token = authHeader.split(" ")[1];
+  try {
+    jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+};
+
 app.get("/api/settings", async (req, res) => {
   res.json(await getSettings());
 });
-app.post("/api/settings", async (req, res) => {
+app.post("/api/settings", authMiddleware, async (req, res) => {
   const { reminderOffset } = req.body;
   await setDoc(doc(db, "settings", "global"), { reminderOffset });
   res.json({ success: true });
 });
 
 // Classes API
+
+app.get("/api/paper-types", async (req, res) => {
+  try {
+    const snapshot = await getDocs(collection(db, "paperTypes"));
+    const types = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    res.json(types);
+  } catch (e) {
+    res.status(500).json({ error: "Failed to fetch paper types" });
+  }
+});
+
+app.post("/api/paper-types", authMiddleware, async (req, res) => {
+  try {
+    const data = req.body;
+    if (data.id) {
+      await setDoc(doc(db, "paperTypes", data.id), data);
+    } else {
+      await addDoc(collection(db, "paperTypes"), data);
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to save paper type", details: e.message || e.toString() });
+  }
+});
+
+app.delete("/api/paper-types/:id", authMiddleware, async (req, res) => {
+  try {
+    await deleteDoc(doc(db, "paperTypes", req.params.id));
+    const examsSnap = await getDocs(collection(db, "exams"));
+    for (const d of examsSnap.docs) {
+      if (d.data().paperTypeId === req.params.id) {
+        await deleteDoc(d.ref);
+      }
+    }
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: "Failed to delete paper type" });
+  }
+});
+
 app.get("/api/classes", async (req, res) => {
   res.json(await getClasses());
 });
 
-app.post("/api/classes", async (req, res) => {
+app.post("/api/classes", authMiddleware, async (req, res) => {
   const { id, name } = req.body;
   const newId = id || Date.now().toString();
   await setDoc(doc(db, "classes", newId), { name });
@@ -264,12 +411,14 @@ app.post("/api/classes", async (req, res) => {
 });
 
 
-app.delete("/api/classes/:id/records", async (req, res) => {
+app.delete("/api/classes/:id/records", authMiddleware, async (req, res) => {
   const { id } = req.params;
+  console.log("Deleting records for class:", id);
   try {
     // Delete all timetable entries for this class
     const timetableSnap = await getDocs(collection(db, "timetable"));
     const timetableDocs = timetableSnap.docs.filter(d => d.data().classId === id);
+    console.log("Found timetable docs to delete:", timetableDocs.length);
     for (const doc of timetableDocs) {
       await deleteDoc(doc.ref);
     }
@@ -277,17 +426,19 @@ app.delete("/api/classes/:id/records", async (req, res) => {
     // Delete all exams for this class
     const examsSnap = await getDocs(collection(db, "exams"));
     const examsDocs = examsSnap.docs.filter(d => d.data().classId === id);
+    console.log("Found exams docs to delete:", examsDocs.length);
     for (const doc of examsDocs) {
       await deleteDoc(doc.ref);
     }
     
     res.json({ success: true });
   } catch (error: any) {
+    console.error("Error deleting records:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.delete("/api/classes/:id", async (req, res) => {
+app.delete("/api/classes/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
   await deleteDoc(doc(db, "classes", id));
   // Delete associated timetable entries
@@ -305,7 +456,7 @@ app.get("/api/timetable", async (req, res) => {
   res.json(await getTimetable());
 });
 
-async function checkConflict(teacherName: string, time: string, endTime: string | undefined, days: string[], classId: string, excludeId?: string) {
+async function checkConflict(teacherName: string, time: string, endTime: string | undefined, days: string[], classId: string, excludeId?: string, allowConcurrent?: boolean) {
   const timetable = await getTimetable();
   const exams = await getExams();
   
@@ -314,7 +465,7 @@ async function checkConflict(teacherName: string, time: string, endTime: string 
     
     const hasOverlap = entry.days.some((d: string) => days.includes(d) || d === "Daily" || days.includes("Daily"));
     if (hasOverlap && checkTimeOverlap(entry.time, entry.endTime, time, endTime)) {
-      if (entry.classId === classId) {
+      if (!allowConcurrent && entry.classId === classId) {
         return `Clash detected! This class already has ${entry.subject} scheduled at this time.`;
       }
       if (entry.teacherName === teacherName) {
@@ -326,7 +477,7 @@ async function checkConflict(teacherName: string, time: string, endTime: string 
   for (const exam of exams) {
     if (excludeId && exam.id === excludeId) continue;
     if (checkTimeOverlap(exam.time, exam.endTime, time, endTime)) {
-      const examDay = new Date(exam.date).toLocaleDateString("en-US", { weekday: "long" });
+      const examDay = new Date(exam.date + 'T12:00:00').toLocaleDateString("en-US", { weekday: "long" });
       const hasOverlap = days.includes(examDay) || days.includes("Daily");
       if (hasOverlap) {
         if (exam.classId === classId) {
@@ -344,12 +495,12 @@ async function checkConflict(teacherName: string, time: string, endTime: string 
 async function checkExamConflict(invigilators: any[], date: string, time: string, endTime: string | undefined, classId: string, excludeId?: string) {
   const timetable = await getTimetable();
   const exams = await getExams();
-  const examDay = new Date(date).toLocaleDateString("en-US", { weekday: "long" });
+  const examDay = new Date(date + 'T12:00:00').toLocaleDateString("en-US", { weekday: "long" });
 
   for (const entry of timetable) {
     if (checkTimeOverlap(entry.time, entry.endTime, time, endTime)) {
       if (entry.days.includes(examDay) || entry.days.includes("Daily")) {
-        if (entry.classId === classId) {
+        if (classId && entry.classId === classId) {
           return `Clash detected! This class already has ${entry.subject} scheduled at this time.`;
         }
         for (const inv of invigilators) {
@@ -364,7 +515,7 @@ async function checkExamConflict(invigilators: any[], date: string, time: string
   for (const exam of exams) {
     if (excludeId && exam.id === excludeId) continue;
     if (exam.date === date && checkTimeOverlap(exam.time, exam.endTime, time, endTime)) {
-      if (exam.classId === classId) {
+      if (classId && exam.classId === classId) {
          return `Clash detected! This class already has an exam (${exam.subject}) scheduled at this time.`;
       }
       for (const inv of invigilators) {
@@ -377,11 +528,11 @@ async function checkExamConflict(invigilators: any[], date: string, time: string
   return null;
 }
 
-app.post("/api/timetable", async (req, res) => {
+app.post("/api/timetable", authMiddleware, async (req, res) => {
   const { id, teacherName, subject, time, teacherEmail, days, classId, grade } = req.body;
   const newId = id || Date.now().toString();
   
-  const conflict = await checkConflict(teacherName, time, req.body.endTime, days || ["Daily"], classId);
+  const conflict = await checkConflict(teacherName, time, req.body.endTime, days || ["Daily"], classId, undefined, req.body.allowConcurrent);
   if (conflict) return res.status(400).json({ error: conflict });
 
   const data: any = { 
@@ -405,11 +556,11 @@ app.post("/api/timetable", async (req, res) => {
   res.json({ success: true });
 });
 
-app.put("/api/timetable/:id", async (req, res) => {
+app.put("/api/timetable/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
   const updateData = { ...req.body };
   
-  const conflict = await checkConflict(updateData.teacherName, updateData.time, updateData.endTime, updateData.days || ["Daily"], updateData.classId, id);
+  const conflict = await checkConflict(updateData.teacherName, updateData.time, updateData.endTime, updateData.days || ["Daily"], updateData.classId, id, updateData.allowConcurrent);
   if (conflict) return res.status(400).json({ error: conflict });
 
   // Remove undefined fields to prevent Firestore errors
@@ -423,7 +574,7 @@ app.put("/api/timetable/:id", async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete("/api/timetable/:id", async (req, res) => {
+app.delete("/api/timetable/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
   await deleteDoc(doc(db, "timetable", id));
   res.json({ success: true });
@@ -434,18 +585,19 @@ app.get("/api/exams", async (req, res) => {
   res.json(await getExams());
 });
 
-app.post("/api/exams", async (req, res) => {
-  const { id, subject, date, time, classId, invigilators } = req.body;
+app.post("/api/exams", authMiddleware, async (req, res) => {
+  const { id, subject, date, time, classId, invigilators, paperTypeId } = req.body;
   const newId = id || Date.now().toString();
 
   const conflict = await checkExamConflict(invigilators || [], date, time, req.body.endTime, classId);
   if (conflict) return res.status(400).json({ error: conflict });
 
-  await setDoc(doc(db, "exams", newId), { subject, date, time, endTime: req.body.endTime, classId, invigilators: invigilators || [] });
+  await setDoc(doc(db, "exams", newId), { subject, date, time, endTime: req.body.endTime, classId, paperTypeId: paperTypeId || null, invigilators: invigilators || [] });
   res.json({ success: true });
 });
 
-app.put("/api/exams/:id", async (req, res) => {
+app.put("/api/exams/:id", authMiddleware, async (req, res) => {
+  try {
   const { id } = req.params;
   const updateData = { ...req.body };
   
@@ -458,10 +610,14 @@ app.put("/api/exams/:id", async (req, res) => {
 
   await updateDoc(doc(db, "exams", id), updateData);
   res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error in PUT /api/exams/:id :", error);
+    res.status(500).json({ error: "Server error during update: " + error.message });
+  }
 });
 
 
-app.delete("/api/exams/all", async (req, res) => {
+app.delete("/api/exams/all", authMiddleware, async (req, res) => {
   try {
     const examsSnap = await getDocs(collection(db, "exams"));
     for (const doc of examsSnap.docs) {
@@ -473,7 +629,7 @@ app.delete("/api/exams/all", async (req, res) => {
   }
 });
 
-app.delete("/api/exams/:id", async (req, res) => {
+app.delete("/api/exams/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
   await deleteDoc(doc(db, "exams", id));
   res.json({ success: true });
@@ -543,7 +699,7 @@ ${JSON.stringify(formattedExams, null, 2)}`,
   }
 });
 
-app.post("/api/intelligence", async (req, res) => {
+app.post("/api/intelligence", authMiddleware, async (req, res) => {
   try {
     const { prompt } = req.body;
     const response = await ai.models.generateContent({
@@ -554,6 +710,12 @@ app.post("/api/intelligence", async (req, res) => {
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("Express Global Error:", err);
+  res.status(500).json({ error: err.message || "Internal Server Error" });
 });
 
 async function startServer() {

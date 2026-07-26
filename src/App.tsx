@@ -4,11 +4,13 @@
  */
 
 import React, { useState, useEffect } from "react";
+interface ConcurrentOption { day: string; time: string; endTime?: string; }
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, Trash2, Edit2, Moon, Sun, Clock, BookOpen, User, Mail, Sparkles, Activity, GraduationCap, Calendar, Download, Printer, List, Calendar as CalendarIcon, FileText } from "lucide-react";
+import { Plus, Trash2, Edit2, Moon, Sun, Clock, BookOpen, User, Mail, Sparkles, Activity, GraduationCap, Calendar, Download, Printer, List, Calendar as CalendarIcon, FileText, Search, Lock, LogIn, KeyRound, LogOut, Eye, EyeOff } from "lucide-react";
 import { Chatbot } from "./components/Chatbot";
 import { ExamForm } from "./components/ExamForm";
 import { TimetablePreview } from "./components/TimetablePreview";
+import { PaperSchedulePreview } from "./components/PaperSchedulePreview";
 
 export const formatTimeAmPm = (time24?: string) => {
   if (!time24) return "";
@@ -23,14 +25,37 @@ export const formatTimeAmPm = (time24?: string) => {
 };
 
 import { triggerHaptic, triggerHapticSuccess, triggerHapticError } from "./lib/haptics";
-import type { TimetableEntry, EmailLog, SchoolClass, ExamEntry } from "./types";
+import type { TimetableEntry, EmailLog, SchoolClass, ExamEntry, PaperType } from "./types";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+
+
+const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const token = localStorage.getItem('adminToken');
+  const headers = new Headers(init?.headers);
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  const response = await window.fetch(input, { ...init, headers });
+  if (response.status === 401 && !input.toString().includes('/api/auth/login')) {
+    localStorage.removeItem('adminToken');
+    window.location.href = '/';
+    return new Promise(() => {});
+  }
+  return response;
+};
 
 export default function App() {
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
   const [classesList, setClassesList] = useState<SchoolClass[]>([]);
   const [exams, setExams] = useState<ExamEntry[]>([]);
+  const [paperTypes, setPaperTypes] = useState<PaperType[]>([]);
+  const [selectedPaperTypeId, setSelectedPaperTypeId] = useState<string | null>(null);
+  const [concurrentOptions, setConcurrentOptions] = useState<ConcurrentOption[]>([]);
+  const [showConcurrentPrompt, setShowConcurrentPrompt] = useState(false);
+  const [showConcurrentForm, setShowConcurrentForm] = useState(false);
+  const [concurrentFormData, setConcurrentFormData] = useState<Partial<TimetableEntry>>({});
+  const [selectedConcurrentDay, setSelectedConcurrentDay] = useState<string>("");
   const [selectedClassId, setSelectedClassId] = useState<string | null>(null);
   
   const [logs, setLogs] = useState<EmailLog[]>([]);
@@ -38,6 +63,8 @@ export default function App() {
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isClassFormOpen, setIsClassFormOpen] = useState(false);
+  const [isPaperTypeFormOpen, setIsPaperTypeFormOpen] = useState(false);
+  const [paperTypeFormData, setPaperTypeFormData] = useState({ name: "" });
   const [isExamFormOpen, setIsExamFormOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   
@@ -46,12 +73,181 @@ export default function App() {
   const [classFormData, setClassFormData] = useState({ name: "" });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{type: 'class' | 'entry' | 'exam' | 'allRecords' | 'allGlobalExams', id: string} | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<{type: 'class' | 'entry' | 'exam' | 'allRecords' | 'allGlobalExams' | 'paperType', id: string} | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSubmittingClass, setIsSubmittingClass] = useState(false);
   const [isSubmittingEntry, setIsSubmittingEntry] = useState(false);
   const [toastMessage, setToastMessage] = useState<{title: string, message: string, type: 'error' | 'success'} | null>(null);
+  
+  // Auth & User View States
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [authForm, setAuthForm] = useState({ username: '', password: '', code: '', newPassword: '', confirmPassword: '' });
+  const [authMode, setAuthMode] = useState<'login' | 'forgot' | 'reset'>('login');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [activeTab, setActiveTab] = useState<'home' | 'classes' | 'papers'>('home');
+
+  
+  const exportPaperScheduleToPDF = async (forTeachers: boolean = false) => {
+    triggerHaptic();
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4'); // Portrait
+      const currentType = paperTypes.find(t => t.id === selectedPaperTypeId);
+      const typeName = currentType ? currentType.name : "EXAM";
+      
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+
+      doc.setFillColor(255, 255, 255);
+      doc.rect(0, 0, pageWidth, pageHeight, 'F');
+
+      doc.setDrawColor(20, 30, 60);
+      doc.setLineWidth(1);
+      doc.rect(10, 10, pageWidth - 20, pageHeight - 20);
+      doc.setDrawColor(20, 30, 60); 
+      doc.setLineWidth(0.5);
+      doc.rect(14, 14, pageWidth - 28, pageHeight - 28);
+
+      let startY = 48; 
+      
+      try {
+        const response = await customFetch('/logo.jpg');
+        const blob = await response.blob();
+        const reader = new FileReader();
+        const base64data = await new Promise((resolve) => {
+          reader.readAsDataURL(blob);
+          reader.onloadend = () => resolve(reader.result);
+        });
+        doc.addImage(base64data as string, 'JPEG', pageWidth / 2 - 20, 20, 40, 24);
+      } catch (err) {
+        console.warn("Logo not found");
+      }
+
+      doc.setFont("times", "bold");
+      doc.setFontSize(22);
+      doc.setTextColor(20, 30, 60);
+      doc.text("PAPER SCHEDULE", pageWidth / 2, startY + 5, { align: 'center' });
+      
+      doc.setFontSize(14);
+      doc.setTextColor(100, 110, 140);
+      doc.text(typeName.toUpperCase(), pageWidth / 2, startY + 12, { align: 'center' });
+
+      doc.setDrawColor(200, 205, 220);
+      doc.setLineWidth(0.5);
+      doc.line(pageWidth/2 - 40, startY + 18, pageWidth/2 + 40, startY + 18);
+
+      const typeExams = exams.filter(e => e.paperTypeId === selectedPaperTypeId);
+      const sortedExams = [...typeExams].sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return a.time.localeCompare(b.time);
+      });
+
+      const getDayOfWeek = (dateStr: string) => {
+        const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        const d = new Date(dateStr + 'T12:00:00');
+        return daysArr[d.getDay()];
+      };
+
+      const tableData = sortedExams.map(exam => {
+        const dateDay = `${exam.date}\n${getDayOfWeek(exam.date)}`;
+        const timeText = `${formatTimeAmPm(exam.time)} ${exam.endTime ? '- ' + formatTimeAmPm(exam.endTime) : ''}`;
+        const invigs = exam.invigilators && exam.invigilators.length > 0 ? exam.invigilators.map(i => i.name).join(', ') : 'None';
+        return forTeachers 
+          ? [dateDay, timeText, exam.subject.toUpperCase(), invigs]
+          : [dateDay, timeText, exam.subject.toUpperCase()];
+      });
+
+      if (sortedExams.length > 0) {
+          autoTable(doc, {
+            startY: startY + 25,
+            head: forTeachers 
+              ? [['DATE & DAY', 'TIME', 'SUBJECT', 'INVIGILATORS']]
+              : [['DATE & DAY', 'TIME', 'SUBJECT']],
+            body: tableData,
+            theme: 'grid',
+            headStyles: { 
+               fillColor: [20, 30, 60],
+               textColor: [255, 255, 255], 
+               halign: 'center', 
+               valign: 'middle', 
+               fontStyle: 'bold', 
+               fontSize: 10,
+               lineColor: [20, 30, 60],
+               lineWidth: 0.6
+            },
+            bodyStyles: { 
+               halign: 'center', 
+               valign: 'middle', 
+               textColor: [20, 30, 60], 
+               fontSize: 9, 
+               fontStyle: 'bold',
+               lineColor: [40, 50, 80],
+               lineWidth: 0.6,
+               cellPadding: 4, 
+            },
+            alternateRowStyles: { fillColor: [248, 249, 251] },
+            styles: { font: 'times', overflow: 'linebreak', halign: 'center', valign: 'middle', cellWidth: 'wrap' },
+            margin: { left: 24, right: 24 }
+          });
+      } else {
+         doc.setFont("times", "italic");
+         doc.setFontSize(14);
+         doc.setTextColor(150, 150, 150);
+         doc.text("No papers scheduled for this type.", pageWidth / 2, startY + 30, { align: 'center' });
+      }
+
+      const lastTableY = sortedExams.length > 0 ? (doc as any).lastAutoTable.finalY : startY + 40;
+
+      doc.setFillColor(250, 251, 253);
+      doc.setDrawColor(20, 30, 60);
+      doc.setLineWidth(0.5);
+      if (forTeachers) {
+        doc.roundedRect(24, lastTableY + 10, pageWidth - 48, 38, 2, 2, 'FD');
+        doc.setFontSize(11);
+        doc.setFont("times", "bold");
+        doc.setTextColor(20, 30, 60);
+        doc.text("Instructions for Invigilators:", 28, lastTableY + 16);
+        doc.setFontSize(9.5);
+        doc.setFont("times", "normal");
+        doc.setTextColor(60, 60, 60);
+        doc.text("• All invigilators must be present 30 minutes before test timing and be in formal dressing.", 28, lastTableY + 22);
+        doc.text("• Make sure students sit in class 15 minutes before and check their stationery/calculator (if needed).", 28, lastTableY + 28);
+        doc.text("• Inform E.B's head in case of any issue during assessment and arrange your replacement.", 28, lastTableY + 34);
+      } else {
+        doc.roundedRect(24, lastTableY + 10, pageWidth - 48, 24, 2, 2, 'FD');
+        doc.setFontSize(11);
+        doc.setFont("times", "bold");
+        doc.setTextColor(20, 30, 60);
+        doc.text("Important Instructions:", 28, lastTableY + 16);
+        doc.setFontSize(10);
+        doc.setFont("times", "normal");
+        doc.setTextColor(60, 60, 60);
+        doc.text("• All students must be present 15 minutes prior to the commencement of their scheduled paper.", 28, lastTableY + 22);
+        doc.text("• The administration reserves the right to modify the schedule; please refer to official notice boards for updates.", 28, lastTableY + 28);
+      }
+
+      doc.setFontSize(11);
+      doc.setFont("times", "bold");
+      doc.setTextColor(20, 30, 60);
+      doc.text(`Issue Date: ${new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}`, 24, pageHeight - 20);
+      
+      doc.setDrawColor(20, 30, 60);
+      doc.setLineWidth(0.6);
+      doc.line(pageWidth - 74, pageHeight - 25, pageWidth - 24, pageHeight - 25);
+      doc.text("Principal / Administrator", pageWidth - 49, pageHeight - 20, { align: 'center' });
+
+      doc.save(`${typeName}_Schedule.pdf`);
+    } catch (e) {
+      console.error(e);
+      showToast("Error", "Failed to generate PDF", "error");
+      triggerHapticError();
+    }
+  };
 
   const exportToPDF = async () => {
     triggerHaptic();
@@ -80,7 +276,7 @@ export default function App() {
       // Logo
       let logoLoaded = false;
       try {
-        const response = await fetch('/logo.jpg');
+        const response = await customFetch('/logo.jpg');
         const blob = await response.blob();
         const reader = new FileReader();
         const base64data = await new Promise((resolve) => {
@@ -126,25 +322,19 @@ export default function App() {
 
       // Prepare Data
       const classEntries = entries.filter(e => e.classId === selectedClassId);
-      const classExams = exams.filter(e => !selectedClassId || e.classId === selectedClassId);
-      
       // Determine actual days to show
       const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
       
       const emptyDays = new Set<string>();
       daysOfWeek.forEach(day => {
         const hasClasses = classEntries.some(e => e.days?.includes(day) || e.days?.includes('Daily'));
-        const hasExams = classExams.some(e => {
-            const dateObj = new Date(e.date);
-            const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-            return daysArr[dateObj.getDay()] === day;
-        });
+        const hasExams = false;
         if (!hasClasses && !hasExams) emptyDays.add(day);
       });
 
       const allTimes = new Set<string>();
       classEntries.forEach(e => allTimes.add(e.time));
-      classExams.forEach(e => allTimes.add(e.time));
+      
       
       const timesArray = Array.from(allTimes).sort((a, b) => {
         const parseTime = (t: string) => {
@@ -196,36 +386,12 @@ export default function App() {
             
             const dayEntries = classEntries.filter(e => e.time === time && (e.days?.includes(day) || e.days?.includes('Daily')));
             if (dayEntries.length > 0) {
-              cellText += dayEntries.map(e => e.subject.toUpperCase()).join("\n");
+              cellText += dayEntries.map(e => e.subject.toUpperCase()).join("\\n");
               const entryWithEnd = dayEntries.find(e => e.endTime);
               if (entryWithEnd) {
                   let span = 1;
                   for (let i = rowIndex + 1; i < timesArray.length; i++) {
                       if (timesArray[i] < entryWithEnd.endTime) {
-                          span++;
-                      } else {
-                          break;
-                      }
-                  }
-                  maxRowSpan = Math.max(maxRowSpan, span);
-              }
-            }
-            
-            const dayExams = classExams.filter(e => {
-              if (e.time !== time) return false;
-              const dateObj = new Date(e.date);
-              const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-              return daysArr[dateObj.getDay()] === day;
-            });
-            
-            if (dayExams.length > 0) {
-              if (cellText) cellText += "\n";
-              cellText += dayExams.map(e => `[EXAM]\n${e.subject.toUpperCase()}`).join("\n");
-              const examWithEnd = dayExams.find(e => e.endTime);
-              if (examWithEnd) {
-                  let span = 1;
-                  for (let i = rowIndex + 1; i < timesArray.length; i++) {
-                      if (timesArray[i] < examWithEnd.endTime) {
                           span++;
                       } else {
                           break;
@@ -295,7 +461,7 @@ export default function App() {
               // Ensure dynamic column sizing so text fits perfectly
               0: { cellWidth: 28 }, // TIME column
             },
-            margin: { left: 20, right: 20 }
+            margin: { left: 24, right: 24 }
           });
       } else {
          doc.setFont("times", "italic");
@@ -310,29 +476,29 @@ export default function App() {
       doc.setFillColor(250, 251, 253);
       doc.setDrawColor(20, 30, 60);
       doc.setLineWidth(0.5);
-      doc.roundedRect(20, lastTableY + 10, pageWidth - 40, 24, 2, 2, 'FD');
+      doc.roundedRect(24, lastTableY + 10, pageWidth - 48, 24, 2, 2, 'FD');
 
       doc.setFontSize(11);
       doc.setFont("times", "bold");
       doc.setTextColor(20, 30, 60);
-      doc.text("Important Instructions:", 24, lastTableY + 16);
+      doc.text("Important Instructions:", 28, lastTableY + 16);
       
       doc.setFontSize(10);
       doc.setFont("times", "normal");
       doc.setTextColor(60, 60, 60);
-      doc.text("• All students must be present 15 minutes prior to the commencement of their scheduled class.", 24, lastTableY + 22);
-      doc.text("• The administration reserves the right to modify the timetable; please refer to official notice boards for updates.", 24, lastTableY + 28);
+      doc.text("• All students must be present 15 minutes prior to the commencement of their scheduled class.", 28, lastTableY + 22);
+      doc.text("• The administration reserves the right to modify the timetable; please refer to official notice boards for updates.", 28, lastTableY + 28);
       
       // Signature and Date
       doc.setFontSize(11);
       doc.setFont("times", "bold");
       doc.setTextColor(20, 30, 60);
-      doc.text(`Issue Date: ${new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}`, 20, pageHeight - 20);
+      doc.text(`Issue Date: ${new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}`, 24, pageHeight - 20);
       
       doc.setDrawColor(20, 30, 60);
       doc.setLineWidth(0.6);
-      doc.line(pageWidth - 70, pageHeight - 25, pageWidth - 20, pageHeight - 25);
-      doc.text("Principal / Administrator", pageWidth - 45, pageHeight - 20, { align: 'center' });
+      doc.line(pageWidth - 74, pageHeight - 25, pageWidth - 24, pageHeight - 25);
+      doc.text("Principal / Administrator", pageWidth - 49, pageHeight - 20, { align: 'center' });
       
       doc.save(`${className}_Timetable.pdf`);
       setToastMessage({ title: "Success", message: "PDF Downloaded", type: "success" });
@@ -345,9 +511,16 @@ export default function App() {
   };
 
   useEffect(() => {
+    const token = localStorage.getItem("adminToken");
+    if (token) {
+      setIsAdmin(true);
+    } else {
+      setIsAdmin(false);
+    }
     fetchEntries();
     fetchClasses();
     fetchExams();
+    fetchPaperTypes();
     fetchSettings();
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       setIsDark(true);
@@ -370,7 +543,7 @@ export default function App() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch("/api/settings");
+      const res = await customFetch("/api/settings");
       const data = await res.json();
       if (data.reminderOffset) setReminderOffset(data.reminderOffset);
     } catch (e) {
@@ -380,7 +553,7 @@ export default function App() {
 
   const updateSettings = async (offset: number) => {
     try {
-      await fetch("/api/settings", {
+      await customFetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reminderOffset: offset }),
@@ -393,9 +566,20 @@ export default function App() {
     }
   };
 
+  
+  const fetchPaperTypes = async () => {
+    try {
+      const res = await customFetch("/api/paper-types");
+      const data = await res.json();
+      setPaperTypes(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const fetchExams = async () => {
     try {
-      const res = await fetch("/api/exams");
+      const res = await customFetch("/api/exams");
       const data = await res.json();
       setExams(data);
     } catch (e) {
@@ -405,7 +589,7 @@ export default function App() {
 
   const fetchClasses = async () => {
     try {
-      const res = await fetch("/api/classes");
+      const res = await customFetch("/api/classes");
       const data = await res.json();
       setClassesList(data);
     } catch (e) {
@@ -415,7 +599,7 @@ export default function App() {
 
   const fetchEntries = async () => {
     try {
-      const res = await fetch("/api/timetable");
+      const res = await customFetch("/api/timetable");
       const data = await res.json();
       setEntries(data);
     } catch (e) {
@@ -427,7 +611,7 @@ export default function App() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch("/api/logs");
+      const res = await customFetch("/api/logs");
       const data = await res.json();
       setLogs(data);
     } catch (e) {
@@ -452,7 +636,7 @@ export default function App() {
     triggerHapticSuccess();
     
     try {
-      await fetch("/api/classes", {
+      await customFetch("/api/classes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newClassData)
@@ -466,17 +650,53 @@ export default function App() {
     }
   };
 
+  
+  const handleAddPaperType = async (name: string) => {
+    try {
+      const res = await customFetch("/api/paper-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      if (res.ok) {
+        fetchPaperTypes();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeletePaperTypeClick = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    triggerHaptic();
+    setDeleteConfirm({ type: 'paperType', id });
+  };
+
   const handleDeleteClassClick = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     triggerHaptic();
     setDeleteConfirm({ type: 'class', id });
   };
 
+  
+  const confirmDeletePaperType = async (id: string) => {
+    try {
+      await customFetch(`/api/paper-types/${id}`, { method: "DELETE" });
+      setPaperTypes(prev => prev.filter(t => t.id !== id));
+      if (selectedPaperTypeId === id) setSelectedPaperTypeId(null);
+      await fetchExams();
+    } catch (e) {
+      console.error(e);
+    }
+    setDeleteConfirm(null);
+  };
+
   const confirmDeleteClass = async (id: string) => {
     try {
-      await fetch(`/api/classes/${id}`, { method: "DELETE" });
+      await customFetch(`/api/classes/${id}`, { method: "DELETE" });
       await fetchClasses();
       await fetchEntries();
+      await fetchExams();
       if (selectedClassId === id) setSelectedClassId(null);
       setDeleteConfirm(null);
     } catch (err) {
@@ -486,7 +706,7 @@ export default function App() {
   
   const confirmDeleteAllRecords = async (classId: string) => {
     try {
-      await fetch(`/api/classes/${classId}/records`, { method: "DELETE" });
+      await customFetch(`/api/classes/${classId}/records`, { method: "DELETE" });
       await fetchEntries();
       await fetchExams();
       setDeleteConfirm(null);
@@ -498,7 +718,7 @@ export default function App() {
   
   const confirmDeleteAllGlobalExams = async () => {
     try {
-      await fetch(`/api/exams/all`, { method: "DELETE" });
+      await customFetch(`/api/exams/all`, { method: "DELETE" });
       await fetchExams();
       setDeleteConfirm(null);
       showToast("Success", "All scheduled papers deleted.", "success");
@@ -508,11 +728,12 @@ export default function App() {
   };
 
   const handleExamSubmit = async (data: Partial<ExamEntry>) => {
+    if (selectedPaperTypeId && !data.classId) data.paperTypeId = selectedPaperTypeId;
     setIsSubmittingEntry(true);
     triggerHaptic();
     try {
-      const res = await fetch("/api/exams", {
-        method: "POST",
+      const res = await customFetch(editingExamId ? `/api/exams/${editingExamId}` : "/api/exams", {
+        method: editingExamId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...data, classId: selectedClassId, id: editingExamId || undefined }),
       });
@@ -557,7 +778,7 @@ export default function App() {
       const newDate = `${year}-${month}-${day}`;
 
       try {
-        const res = await fetch(`/api/exams/${raw.id}`, {
+        const res = await customFetch(`/api/exams/${raw.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...raw, time: newTime, date: newDate }),
@@ -578,7 +799,7 @@ export default function App() {
       const newDay = daysOfWeekMap[start.getDay()];
       
       try {
-        const res = await fetch(`/api/timetable/${raw.id}`, {
+        const res = await customFetch(`/api/timetable/${raw.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...raw, time: newTime, days: [newDay] }),
@@ -613,7 +834,7 @@ export default function App() {
     triggerHaptic();
     
     try {
-      const res = await fetch(url, {
+      const res = await customFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(submissionData),
@@ -624,6 +845,10 @@ export default function App() {
         showToast("Scheduling Conflict", result.error || "Failed to schedule class.", "error");
         triggerHapticError();
       } else {
+        const submittedOptions: ConcurrentOption[] = [];
+        if (formData.days && formData.days.length > 0 && formData.time) {
+          submittedOptions.push({ day: formData.days[0], time: formData.time, endTime: formData.endTime });
+        }
         if (!editingId && additionalSessions.length > 0) {
             for (const session of additionalSessions) {
                if (!session.time) continue;
@@ -635,7 +860,7 @@ export default function App() {
                   time: session.time,
                   endTime: session.endTime
                };
-               const sessionRes = await fetch("/api/timetable", {
+               const sessionRes = await customFetch("/api/timetable", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify(sessionData)
@@ -643,17 +868,162 @@ export default function App() {
                const sessionResult = await sessionRes.json();
                if (!sessionRes.ok) {
                    showToast("Scheduling Conflict", `Failed to schedule extra class on ${session.day}. ${sessionResult.error}`, "error");
+               } else {
+                   submittedOptions.push({ day: session.day, time: session.time, endTime: session.endTime });
                }
             }
         }
 
         triggerHapticSuccess();
-        setIsFormOpen(false);
-        setFormData({ days: ["Daily"] });
-        setAdditionalSessions([]);
-        setEditingId(null);
-        showToast("Success", editingId ? "Class updated." : "Class added.", "success");
         await fetchEntries();
+        if (!editingId && submittedOptions.length > 0) {
+           setConcurrentOptions(submittedOptions);
+           setShowConcurrentPrompt(true);
+           setIsFormOpen(false);
+           setFormData({ days: ["Daily"] });
+           setAdditionalSessions([]);
+        } else {
+           setIsFormOpen(false);
+           setFormData({ days: ["Daily"] });
+           setAdditionalSessions([]);
+           setEditingId(null);
+           showToast("Success", editingId ? "Class updated." : "Class added.", "success");
+        }
+      }
+    } catch (err) {
+      triggerHapticError();
+      console.error(err);
+      showToast("Error", "Network error.", "error");
+    } finally {
+      setIsSubmittingEntry(false);
+    }
+  };
+
+  const handleAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsAuthenticating(true);
+    triggerHaptic();
+    
+    try {
+      if (authMode === 'login') {
+        const res = await customFetch('/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: authForm.username, password: authForm.password })
+        });
+        const data = await res.json();
+        if (data.success) {
+          localStorage.setItem('adminToken', data.token);
+          setIsAdmin(true);
+          setIsLoginOpen(false);
+          setAuthForm({ username: '', password: '', code: '', newPassword: '', confirmPassword: '' });
+          showToast("Success", "Logged in successfully.", "success");
+        } else {
+          showToast("Error", data.error || "Invalid credentials", "error");
+          triggerHapticError();
+        }
+      } else if (authMode === 'forgot') {
+        const res = await customFetch('/api/auth/forgot-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: authForm.username })
+        });
+        const data = await res.json();
+        if (data.success) {
+          setAuthMode('reset');
+          showToast("Success", "Reset code sent to email.", "success");
+        } else {
+          showToast("Error", data.error || "User not found", "error");
+          triggerHapticError();
+        }
+      } else if (authMode === 'reset') {
+        if (!authForm.code || authForm.code.trim().length === 0) {
+          showToast("Error", "Please enter the 6-digit verification code.", "error");
+          triggerHapticError();
+          setIsAuthenticating(false);
+          return;
+        }
+        if (!authForm.newPassword || authForm.newPassword.trim().length === 0) {
+          showToast("Error", "Please enter a new password.", "error");
+          triggerHapticError();
+          setIsAuthenticating(false);
+          return;
+        }
+        if (!authForm.confirmPassword || authForm.confirmPassword.trim().length === 0) {
+          showToast("Error", "Please confirm your new password.", "error");
+          triggerHapticError();
+          setIsAuthenticating(false);
+          return;
+        }
+        if (authForm.newPassword.length < 6) {
+          showToast("Error", "New password must be at least 6 characters long.", "error");
+          triggerHapticError();
+          setIsAuthenticating(false);
+          return;
+        }
+        if (authForm.newPassword !== authForm.confirmPassword) {
+          showToast("Error", "New password and Confirm password do not match.", "error");
+          triggerHapticError();
+          setIsAuthenticating(false);
+          return;
+        }
+
+        const res = await customFetch('/api/auth/reset-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: authForm.username, code: authForm.code.trim(), newPassword: authForm.newPassword })
+        });
+        const data = await res.json();
+        if (data.success) {
+          setAuthMode('login');
+          setAuthForm({ username: '', password: '', code: '', newPassword: '', confirmPassword: '' });
+          showToast("Success", "Password reset successfully. Please login with your new password.", "success");
+        } else {
+          showToast("Error", data.error || "Invalid code", "error");
+          triggerHapticError();
+        }
+      }
+    } catch (err) {
+      triggerHapticError();
+      showToast("Error", "Network error occurred.", "error");
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleConcurrentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingEntry) return;
+
+    const selectedOption = concurrentOptions.find(o => o.day === selectedConcurrentDay);
+    if (!selectedOption) return;
+
+    const submissionData = {
+      ...concurrentFormData,
+      classId: selectedClassId,
+      days: [selectedOption.day],
+      time: selectedOption.time,
+      endTime: selectedOption.endTime,
+      id: Date.now().toString(),
+      allowConcurrent: true
+    };
+
+    setIsSubmittingEntry(true);
+    triggerHaptic();
+
+    try {
+      const res = await customFetch("/api/timetable", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(submissionData),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+         showToast("Scheduling Conflict", result.error || "Failed to schedule concurrent class.", "error");
+         triggerHapticError();
+      } else {
+         triggerHapticSuccess();
+         await fetchEntries();
+         setShowConcurrentForm(false);
+         setShowConcurrentPrompt(true); 
+         setConcurrentFormData({});
       }
     } catch (err) {
       triggerHapticError();
@@ -671,7 +1041,7 @@ export default function App() {
 
   const confirmDeleteEntry = async (id: string) => {
     try {
-      await fetch(`/api/timetable/${id}`, { method: "DELETE" });
+      await customFetch(`/api/timetable/${id}`, { method: "DELETE" });
       await fetchEntries();
       setDeleteConfirm(null);
     } catch (err) {
@@ -681,7 +1051,7 @@ export default function App() {
 
   const confirmDeleteExam = async (id: string) => {
     try {
-      await fetch(`/api/exams/${id}`, { method: "DELETE" });
+      await customFetch(`/api/exams/${id}`, { method: "DELETE" });
       await fetchExams();
       setDeleteConfirm(null);
     } catch (err) {
@@ -701,7 +1071,7 @@ export default function App() {
     triggerHaptic();
     setIsGenerating(true);
     try {
-      const res = await fetch("/api/intelligence", {
+      const res = await customFetch("/api/intelligence", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: "Generate a realistic example timetable entry for a high school class. Return a JSON object with properties: teacherName, subject, time (string in HH:MM format, 24-hr), teacherEmail. Do NOT include markdown formatting or extra text." })
@@ -755,29 +1125,58 @@ export default function App() {
               initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} 
               className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white"
             >
-              {selectedClassId ? (
+              {activeTab === 'home' ? "Dashboard" : selectedClassId ? (
                 <div className="flex items-center gap-4 cursor-pointer" onClick={() => setSelectedClassId(null)}>
                   <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
                   {classesList.find(c => c.id === selectedClassId)?.name} Schedule
                 </div>
-              ) : "Classes"}
+              ) : activeTab === 'papers' ? (
+                selectedPaperTypeId ? (
+                  <div className="flex items-center gap-4 cursor-pointer" onClick={() => setSelectedPaperTypeId(null)}>
+                    <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
+                    {paperTypes.find(t => t.id === selectedPaperTypeId)?.name} Papers
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveTab('home')}>
+                    <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
+                    Scheduled Papers
+                  </div>
+                )
+              ) : (
+                <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveTab('home')}>
+                  <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
+                  Classes
+                </div>
+              )}
             </motion.h1>
             <motion.p 
               initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
               className="text-slate-500 dark:text-slate-400 mt-2 text-lg"
             >
-              {selectedClassId ? "Manage timetable for this class" : "Select a class to view its schedule"}
+              {activeTab === 'home' ? "Select a module to view" : selectedClassId ? "Manage timetable for this class" : activeTab === 'papers' ? (selectedPaperTypeId ? "Manage papers for this type" : "Select a paper type to view") : "Select a class to view its schedule"}
             </motion.p>
           </div>
           
           <div className="flex flex-wrap items-center gap-3 no-print w-full md:w-auto mt-4 md:mt-0">
             {selectedClassId && (
-              <button onClick={exportToPDF} className="p-3 bg-white dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm" title="Export to PDF">
+              <button onClick={exportToPDF} className="p-3 bg-white dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm" title="Export Class Timetable to PDF">
                 <Printer size={20} />
               </button>
             )}
+            {!selectedClassId && activeTab === 'papers' && selectedPaperTypeId && (
+              <div className="flex gap-2">
+                <button onClick={() => exportPaperScheduleToPDF(false)} className="px-4 py-2 text-sm bg-white dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm flex items-center gap-2" title="Print for Students (No Invigilators)">
+                  <Printer size={16} />
+                  <span className="hidden sm:inline">Students</span>
+                </button>
+                <button onClick={() => exportPaperScheduleToPDF(true)} className="px-4 py-2 text-sm bg-white dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-full text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 transition-colors shadow-sm flex items-center gap-2" title="Print for Teachers (With Invigilators)">
+                  <Printer size={16} />
+                  <span className="hidden sm:inline">Teachers</span>
+                </button>
+              </div>
+            )}
             
-            {!selectedClassId && (
+            {!selectedClassId && isAdmin && activeTab === 'papers' && selectedPaperTypeId && (
               <button 
                 onClick={() => {
                   triggerHaptic();
@@ -790,7 +1189,21 @@ export default function App() {
                 <span className="hidden sm:inline">Add Paper</span>
               </button>
             )}
+            
+            {!selectedClassId && isAdmin && activeTab === 'papers' && !selectedPaperTypeId && (
+              <button 
+                onClick={() => {
+                  triggerHaptic();
+                  setIsPaperTypeFormOpen(true);
+                }} 
+                className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors shadow-sm"
+              >
+                <FileText size={18} />
+                <span className="hidden sm:inline">Add Type</span>
+              </button>
+            )}
 
+{isAdmin && (
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-full liquid-glass shadow-sm shrink-0">
               <Clock size={16} className="text-slate-500" />
               <select
@@ -804,6 +1217,7 @@ export default function App() {
                 <option value={300}>5h before</option>
               </select>
             </div>
+            )}
 
             <button
               onClick={toggleTheme}
@@ -812,8 +1226,18 @@ export default function App() {
             >
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
             </button>
+            {!isAdmin && (
+              <button
+                onClick={() => setIsLoginOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors shadow-sm shrink-0"
+                title="Admin Login"
+              >
+                <LogIn size={18} />
+                <span className="hidden sm:inline">Admin Login</span>
+              </button>
+            )}
             
-            <button
+{isAdmin && <button
               onClick={() => {
                 triggerHaptic();
                 setIsLogsOpen(true);
@@ -822,9 +1246,22 @@ export default function App() {
               title="Email Logs"
             >
               <Activity size={20} />
-            </button>
+            </button>}
+            {isAdmin && <button
+              onClick={() => {
+                triggerHaptic();
+                setIsAdmin(false);
+                localStorage.removeItem('adminToken');
+                showToast("Success", "Logged out successfully", "success");
+              }}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium bg-slate-100 dark:bg-slate-800/50 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors shadow-sm shrink-0"
+              title="Log Out"
+            >
+              <LogOut size={18} />
+              <span className="hidden sm:inline">Log Out</span>
+            </button>}
 
-            {selectedClassId ? (
+            {selectedClassId && isAdmin ? (
               <div className="flex gap-2 ml-auto md:ml-0">
                 <button
                   onClick={() => {
@@ -851,7 +1288,7 @@ export default function App() {
                   <span className="hidden sm:inline">Add Entry</span>
                 </button>
               </div>
-            ) : (
+            ) : !selectedClassId && isAdmin && activeTab === 'classes' ? (
               <button
                 onClick={() => {
                   triggerHaptic();
@@ -862,7 +1299,7 @@ export default function App() {
                 <Plus size={18} />
                 <span className="hidden sm:inline">Add Class</span>
               </button>
-            )}
+            ) : null}
           </div>
         </header>
 
@@ -875,121 +1312,216 @@ export default function App() {
           <div className="space-y-12">
             {!selectedClassId ? (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  <AnimatePresence>
-                    {classesList.map((c, idx) => (
+                <div className="mb-8">
+                  {activeTab === 'home' ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto py-12">
                       <motion.div
-                        key={c.id}
-                        initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                        animate={{ opacity: 1, scale: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.9, y: -20 }}
-                        transition={{ delay: idx * 0.05 }}
-                        onClick={() => {
-                          triggerHaptic();
-                          setSelectedClassId(c.id);
-                        }}
-                        className="liquid-glass rounded-3xl p-6 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors"
+                        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                        onClick={() => { triggerHaptic(); setActiveTab('classes'); }}
+                        className="liquid-glass rounded-3xl p-10 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors border border-slate-200/50 dark:border-white/10 flex flex-col items-center justify-center text-center gap-6 h-72 shadow-sm hover:shadow-md"
                       >
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="p-3 rounded-2xl bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
-                            <GraduationCap size={24} />
-                          </div>
-                          <button 
-                            onClick={(e) => handleDeleteClassClick(c.id, e)} 
-                            className="p-2 rounded-full hover:bg-red-500/10 text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                        <div className="p-6 rounded-3xl bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 group-hover:scale-110 transition-transform">
+                          <GraduationCap size={56} />
                         </div>
-                        <h3 className="text-2xl font-bold mb-2">{c.name}</h3>
-                        <p className="text-sm text-slate-500 dark:text-slate-400">
-                          {entries.filter(e => e.classId === c.id).length} scheduled classes
-                        </p>
+                        <div>
+                          <h3 className="text-3xl font-bold mb-3">Classes</h3>
+                          <p className="text-slate-500 dark:text-slate-400 text-lg">Manage timetables and schedules</p>
+                        </div>
                       </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
-                {classesList.length === 0 && (
-                  <div className="py-20 text-center text-slate-500">
-                    <div className="w-16 h-16 mx-auto mb-4 bg-slate-200 dark:bg-slate-800 rounded-2xl flex items-center justify-center">
-                      <GraduationCap className="text-slate-400" size={24} />
-                    </div>
-                    <p>No classes available. Create your first class.</p>
-                  </div>
-                )}
-
-                {/* Global Exams Section */}
-                {exams.length > 0 && (
-                  <div className="mt-16">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-                      <div className="flex items-center gap-3">
-                        <FileText className="text-red-500" size={24} />
-                        <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Scheduled Papers</h2>
-                      </div>
-                      <button
-                        onClick={() => {
-                          triggerHaptic();
-                          setDeleteConfirm({ type: 'allGlobalExams', id: 'global' });
-                        }}
-                        className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg w-fit"
-                        title="Delete All Scheduled Papers"
+                      
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+                        onClick={() => { triggerHaptic(); setActiveTab('papers'); }}
+                        className="liquid-glass rounded-3xl p-10 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors border border-slate-200/50 dark:border-white/10 flex flex-col items-center justify-center text-center gap-6 h-72 shadow-sm hover:shadow-md"
                       >
-                        <Trash2 size={18} />
-                        <span className="hidden sm:inline">Clear All</span>
-                      </button>
+                        <div className="p-6 rounded-3xl bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 group-hover:scale-110 transition-transform">
+                          <FileText size={56} />
+                        </div>
+                        <div>
+                          <h3 className="text-3xl font-bold mb-3">Scheduled Papers</h3>
+                          <p className="text-slate-500 dark:text-slate-400 text-lg">View and manage global exams</p>
+                        </div>
+                      </motion.div>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  ) : (
+                    <div className="relative max-w-2xl mx-auto mb-8">
+                      <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input 
+                        type="text"
+                        placeholder={activeTab === 'classes' ? "Search for a class, subject, or teacher to view its schedule..." : "Search scheduled papers by subject or invigilator..."}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full pl-12 pr-4 py-4 rounded-2xl bg-white/60 dark:bg-black/40 border border-slate-200 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-500 shadow-sm text-lg"
+                      />
+                    </div>
+                  )}
+                </div>
+                {activeTab === 'classes' && (
+                  <>
+                    
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       <AnimatePresence>
-                        {exams.map((exam, idx) => (
+                        {classesList.filter(cls => {
+                          if (!searchQuery) return true;
+                          const q = searchQuery.toLowerCase();
+                          return cls.name.toLowerCase().includes(q) ||
+                            entries.filter(e => e.classId === cls.id).some(e => e.subject.toLowerCase().includes(q) || e.teacherName.toLowerCase().includes(q));
+                        }).length === 0 && searchQuery ? (
+                          <div className="col-span-full text-center py-12 text-slate-500">
+                            <Search className="mx-auto mb-3 opacity-50" size={32} />
+                            <p className="text-lg">No classes found matching "{searchQuery}"</p>
+                          </div>
+                        ) : classesList.filter(cls => {
+                          if (!searchQuery) return true;
+                          const q = searchQuery.toLowerCase();
+                          return cls.name.toLowerCase().includes(q) ||
+                            entries.filter(e => e.classId === cls.id).some(e => e.subject.toLowerCase().includes(q) || e.teacherName.toLowerCase().includes(q));
+                        }).map((cls, idx) => (
                           <motion.div
-                            key={`exam-${exam.id}`}
+                            key={cls.id}
                             initial={{ opacity: 0, scale: 0.9, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.9, y: -20 }}
                             transition={{ delay: idx * 0.05 }}
-                            className="liquid-glass rounded-3xl p-6 group relative overflow-hidden text-slate-900 dark:text-white border border-red-500/30"
+                            onClick={() => {
+                              triggerHaptic();
+                              setSelectedClassId(cls.id);
+                            }}
+                            className="liquid-glass rounded-3xl p-6 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors"
                           >
                             <div className="flex justify-between items-start mb-4">
-                              <div className="flex gap-2">
-                                <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-red-100/50 dark:bg-red-900/30 text-red-700 dark:text-red-300 text-sm font-semibold tracking-wide">
-                                  {formatTimeAmPm(exam.time)}
-                                </div>
-                                <div className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-orange-100/50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 text-sm font-semibold tracking-wide">
-                                  {exam.date}
-                                </div>
+                              <div className="p-3 rounded-2xl bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400">
+                                <GraduationCap size={24} />
                               </div>
-                              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                                <button onClick={() => { setEditingExamId(exam.id); setIsExamFormOpen(true); }} className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-slate-500">
-                                  <Edit2 size={16} />
-                                </button>
-                                <button onClick={() => setDeleteConfirm({ type: 'exam', id: exam.id })} className="p-2 rounded-full hover:bg-red-500/10 text-red-500">
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
+                              {isAdmin && <button 
+                                onClick={(e) => handleDeleteClassClick(cls.id, e)} 
+                                className="p-2 rounded-full hover:bg-red-500/10 text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                              >
+                                <Trash2 size={16} />
+                              </button>}
                             </div>
-                            
-                            <div className="inline-block px-2 py-0.5 rounded-md bg-red-100 text-red-800 text-xs font-bold mb-2 tracking-wider dark:bg-red-900/50 dark:text-red-200 uppercase">Exam / Paper</div>
-                            <h3 className="text-xl font-bold mb-1 line-clamp-1">{exam.subject}</h3>
-                            
-                            <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/5 space-y-2">
-                              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium uppercase tracking-wider">Invigilators</span>
-                              {exam.invigilators?.map((inv, i) => (
-                                <div key={i} className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                                  <User size={14} className="opacity-70 text-slate-900 dark:text-slate-100" />
-                                  <span className="font-medium text-slate-900 dark:text-slate-100">{inv.name}</span>
-                                  <span className="text-xs text-slate-500">({inv.email})</span>
-                                </div>
-                              ))}
-                              {(!exam.invigilators || exam.invigilators.length === 0) && (
-                                <span className="text-xs text-slate-500">No invigilators assigned</span>
-                              )}
-                            </div>
+                            <h3 className="text-2xl font-bold mb-2">{cls.name}</h3>
+                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                              {entries.filter(e => e.classId === cls.id).length} scheduled sessions
+                            </p>
                           </motion.div>
                         ))}
                       </AnimatePresence>
                     </div>
-                  </div>
+     
+                    {classesList.length === 0 && (
+                      <div className="py-20 text-center text-slate-500">
+                        <div className="w-16 h-16 mx-auto mb-4 bg-slate-200 dark:bg-slate-800 rounded-2xl flex items-center justify-center">
+                          <GraduationCap className="text-slate-400" size={24} />
+                        </div>
+                        <p>{isAdmin ? "No classes available. Create your first class." : "No classes have been published yet."}</p>
+                      </div>
+                    )}
+                  </>
                 )}
+
+                {/* Global Exams Section */}
+                {activeTab === 'papers' && (
+                  <div className="mt-4">
+                    {!selectedPaperTypeId ? (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                          <AnimatePresence>
+                            {paperTypes.filter(type => {
+                              if (!searchQuery) return true;
+                              return type.name.toLowerCase().includes(searchQuery.toLowerCase());
+                            }).length === 0 && searchQuery ? (
+                              <div className="col-span-full text-center py-12 text-slate-500">
+                                <Search className="mx-auto mb-3 opacity-50" size={32} />
+                                <p className="text-lg">No paper types found matching "{searchQuery}"</p>
+                              </div>
+                            ) : paperTypes.filter(type => {
+                              if (!searchQuery) return true;
+                              return type.name.toLowerCase().includes(searchQuery.toLowerCase());
+                            }).map((pt, idx) => (
+                              <motion.div
+                                key={pt.id}
+                                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.9, y: -20 }}
+                                transition={{ delay: idx * 0.05 }}
+                                onClick={() => {
+                                  triggerHaptic();
+                                  setSelectedPaperTypeId(pt.id);
+                                }}
+                                className="liquid-glass rounded-3xl p-6 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors"
+                              >
+                                <div className="flex justify-between items-start mb-4">
+                                  <div className="p-3 rounded-2xl bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
+                                    <FileText size={24} />
+                                  </div>
+                                  {isAdmin && <button 
+                                    onClick={(e) => handleDeletePaperTypeClick(pt.id, e)} 
+                                    className="p-2 rounded-full hover:bg-red-500/10 text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>}
+                                </div>
+                                <h3 className="text-2xl font-bold mb-2">{pt.name}</h3>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">
+                                  {exams.filter(e => e.paperTypeId === pt.id).length} scheduled papers
+                                </p>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                        </div>
+                        {paperTypes.length === 0 && (
+                          <div className="py-20 text-center text-slate-500">
+                            <div className="w-16 h-16 mx-auto mb-4 bg-slate-200 dark:bg-slate-800 rounded-2xl flex items-center justify-center">
+                              <FileText className="text-slate-400" size={24} />
+                            </div>
+                            <p>{isAdmin ? "No paper types available. Create your first paper type." : "No paper types have been added yet."}</p>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        {isAdmin && exams.filter(e => e.paperTypeId === selectedPaperTypeId).length > 0 && (
+                          <div className="flex justify-end mb-6">
+                            <button
+                              onClick={() => {
+                                triggerHaptic();
+                                setDeleteConfirm({ type: 'allGlobalExams', id: 'global' });
+                              }}
+                              className="flex items-center gap-2 px-4 py-2 rounded-full bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 font-medium hover:scale-[1.02] active:scale-[0.98] transition-transform shadow-lg w-fit"
+                              title="Delete All Scheduled Papers"
+                            >
+                              <Trash2 size={18} />
+                              <span className="hidden sm:inline">Clear All</span>
+                            </button>
+                          </div>
+                        )}
+                        
+                        <PaperSchedulePreview
+                          exams={exams.filter(exam => exam.paperTypeId === selectedPaperTypeId).filter(exam => {
+                              if (!searchQuery) return true;
+                              const q = searchQuery.toLowerCase();
+                              return exam.subject.toLowerCase().includes(q) ||
+                                      (exam.invigilators && exam.invigilators.some(inv => inv.name.toLowerCase().includes(q) || inv.email.toLowerCase().includes(q)));
+                          })}
+                          classes={classesList}
+                          isAdmin={isAdmin}
+                          onEdit={(examId) => { setEditingExamId(examId); setIsExamFormOpen(true); }}
+                          onDelete={(examId) => setDeleteConfirm({ type: 'exam', id: examId })}
+                        />
+             
+                    {exams.filter(exam => exam.paperTypeId === selectedPaperTypeId).length === 0 && (
+                      <div className="py-20 text-center text-slate-500">
+                        <div className="w-16 h-16 mx-auto mb-4 bg-slate-200 dark:bg-slate-800 rounded-2xl flex items-center justify-center">
+                          <FileText className="text-slate-400" size={24} />
+                        </div>
+                        <p>{isAdmin ? "No scheduled papers available in this type. Create your first paper." : "No papers have been scheduled yet."}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
               </>
             ) : (
               <>
@@ -997,11 +1529,11 @@ export default function App() {
                   <h3 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">Timetable Preview</h3>
                   <TimetablePreview 
                     classEntries={entries.filter(e => e.classId === selectedClassId)}
-                    classExams={exams.filter(e => !selectedClassId || e.classId === selectedClassId)}
+                    
                   />
                 </div>
-                <h3 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">All Entries</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {isAdmin && <h3 className="text-xl font-bold mb-4 text-slate-900 dark:text-white">All Entries</h3>}
+                {isAdmin && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <AnimatePresence>
                     {entries.filter(e => e.classId === selectedClassId).map((entry, idx) => (
                       <motion.div
@@ -1057,9 +1589,9 @@ export default function App() {
                       </motion.div>
                     ))}
                   </AnimatePresence>
-                </div>
+                </div>}
                 
-                {entries.filter(e => e.classId === selectedClassId).length === 0 && (
+                {isAdmin && entries.filter(e => e.classId === selectedClassId).length === 0 && (
                   <div className="py-20 text-center text-slate-500">
                     <div className="w-16 h-16 mx-auto mb-4 bg-slate-200 dark:bg-slate-800 rounded-2xl flex items-center justify-center">
                       <Clock className="text-slate-400" size={24} />
@@ -1073,6 +1605,332 @@ export default function App() {
         )}
 
       </div>
+
+      
+      {/* Concurrent Prompt Modal */}
+      <AnimatePresence>
+        {showConcurrentPrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => {
+                 setShowConcurrentPrompt(false);
+                 showToast("Success", "Schedule entry saved.", "success");
+              }}
+              className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm"
+            />
+            
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm liquid-glass-heavy rounded-3xl p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white text-center"
+            >
+              <div className="w-16 h-16 mx-auto mb-4 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center">
+                <Sparkles size={32} />
+              </div>
+              <h2 className="text-xl font-bold tracking-tight mb-2">
+                Add another subject?
+              </h2>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">
+                Do you want to add another subject class at the same time?
+              </p>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    setShowConcurrentPrompt(false);
+                    showToast("Success", "Schedule entry saved.", "success");
+                  }} 
+                  className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-900 dark:text-white transition-colors"
+                >
+                  No
+                </button>
+                <button 
+                  onClick={() => {
+                    setShowConcurrentPrompt(false);
+                    setShowConcurrentForm(true);
+                    setSelectedConcurrentDay(concurrentOptions[0].day);
+                    setConcurrentFormData({});
+                  }} 
+                  className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-blue-600 text-white shadow-md hover:scale-[1.02] active:scale-[0.98] transition-transform hover:bg-blue-700"
+                >
+                  Yes
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Concurrent Form Modal */}
+      <AnimatePresence>
+        {showConcurrentForm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => {
+                 setShowConcurrentForm(false);
+                 showToast("Success", "Schedule entry saved.", "success");
+              }}
+              className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm"
+            />
+            
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md max-h-[85vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold tracking-tight">
+                  Concurrent Class
+                </h2>
+              </div>
+
+              <form onSubmit={handleConcurrentSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Subject / Course</label>
+                  <div className="relative">
+                    <BookOpen size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="text"
+                      value={concurrentFormData.subject || ""} onChange={e => setConcurrentFormData({...concurrentFormData, subject: e.target.value})}
+                      className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                      placeholder="e.g. Mathematics"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Day</label>
+                    <div className="relative">
+                      <Calendar size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <select 
+                        required
+                        value={selectedConcurrentDay} 
+                        onChange={e => setSelectedConcurrentDay(e.target.value)}
+                        className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white transition-all appearance-none"
+                      >
+                        {concurrentOptions.map((opt, idx) => (
+                           <option key={idx} value={opt.day}>{opt.day}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Time</label>
+                    <div className="relative">
+                      <Clock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <input 
+                        disabled
+                        value={concurrentOptions.find(o => o.day === selectedConcurrentDay)?.time || ""}
+                        className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-black/10 dark:border-white/10 text-slate-500 dark:text-slate-400 cursor-not-allowed"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Teacher Name</label>
+                  <div className="relative">
+                    <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="text"
+                      value={concurrentFormData.teacherName || ""} onChange={e => setConcurrentFormData({...concurrentFormData, teacherName: e.target.value})}
+                      className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                      placeholder="e.g. Mr. Smith"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Teacher Email</label>
+                  <div className="relative">
+                    <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="email"
+                      value={concurrentFormData.teacherEmail || ""} onChange={e => setConcurrentFormData({...concurrentFormData, teacherEmail: e.target.value})}
+                      className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                      placeholder="teacher@school.edu"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">TA Name (Optional)</label>
+                      <div className="relative">
+                        <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          type="text"
+                          value={concurrentFormData.taName || ""} onChange={e => setConcurrentFormData({...concurrentFormData, taName: e.target.value})}
+                          className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                          placeholder="e.g. Alex"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">TA Email (Optional)</label>
+                      <div className="relative">
+                        <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          type="email"
+                          value={concurrentFormData.taEmail || ""} onChange={e => setConcurrentFormData({...concurrentFormData, taEmail: e.target.value})}
+                          className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                          placeholder="ta@school.edu"
+                        />
+                      </div>
+                    </div>
+                </div>
+
+                <div className="pt-2 flex gap-3">
+                  <button type="button" disabled={isSubmittingEntry} onClick={() => {
+                      setShowConcurrentForm(false);
+                      showToast("Success", "Schedule entry saved.", "success");
+                    }} 
+                    className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-900 dark:text-white transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" disabled={isSubmittingEntry} className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-md hover:scale-[1.02] active:scale-[0.98] transition-transform disabled:opacity-50 flex items-center justify-center gap-2">
+                    {isSubmittingEntry && <Sparkles size={16} className="animate-pulse" />}
+                    Add Entry
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      
+      {/* Auth Modal */}
+      <AnimatePresence>
+        {isLoginOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsLoginOpen(false)}
+              className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
+            />
+            
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm max-h-[95vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white"
+            >
+              <div className="w-16 h-16 mx-auto mb-6 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center">
+                {authMode === 'login' ? <Lock size={32} /> : <KeyRound size={32} />}
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight mb-6 text-center">
+                {authMode === 'login' ? 'Admin Login' : authMode === 'forgot' ? 'Reset Password' : 'New Password'}
+              </h2>
+
+              <form onSubmit={handleAuth} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{authMode === 'login' ? 'Username / Email' : 'Email'}</label>
+                  <div className="relative">
+                    <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="text"
+                      disabled={authMode === 'reset'}
+                      value={authForm.username} onChange={e => setAuthForm({...authForm, username: e.target.value})}
+                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      placeholder={authMode === 'login' ? 'admin' : 'admin@example.com'}
+                    />
+                  </div>
+                </div>
+
+                {authMode === 'login' && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Password</label>
+                    <div className="relative">
+                      <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <input 
+                        required type={showPassword ? "text" : "password"}
+                        value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}
+                        className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                        placeholder="••••••••"
+                      />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                    <div className="text-right mt-2">
+                      <button type="button" onClick={() => setAuthMode('forgot')} className="text-sm text-blue-600 hover:text-blue-700 font-medium">Forgot Password?</button>
+                    </div>
+                  </div>
+                )}
+
+                {authMode === 'reset' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">6-Digit Code</label>
+                      <div className="relative">
+                        <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type="text"
+                          value={authForm.code} onChange={e => setAuthForm({...authForm, code: e.target.value})}
+                          className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="123456"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">New Password</label>
+                      <div className="relative">
+                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type={showNewPassword ? "text" : "password"}
+                          value={authForm.newPassword} onChange={e => setAuthForm({...authForm, newPassword: e.target.value})}
+                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="••••••••"
+                        />
+                        <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                          {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Confirm Password</label>
+                      <div className="relative">
+                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type={showConfirmPassword ? "text" : "password"}
+                          value={authForm.confirmPassword} onChange={e => setAuthForm({...authForm, confirmPassword: e.target.value})}
+                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="••••••••"
+                        />
+                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                          {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="pt-4 flex gap-3">
+                  <button type="button" disabled={isAuthenticating} onClick={() => {
+                      if (authMode !== 'login') setAuthMode('login');
+                      else setIsLoginOpen(false);
+                    }} 
+                    className="flex-1 py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-900 dark:text-slate-200 transition-colors"
+                  >
+                    {authMode !== 'login' ? 'Back' : 'Cancel'}
+                  </button>
+                  <button type="submit" disabled={isAuthenticating} className="flex-1 py-3 rounded-2xl font-medium bg-blue-600 text-white shadow-md hover:bg-blue-700 transition-colors flex justify-center items-center gap-2 disabled:opacity-50">
+                    {isAuthenticating && <Sparkles size={16} className="animate-pulse" />}
+                    {authMode === 'login' ? 'Login' : authMode === 'forgot' ? 'Send Code' : 'Reset'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Form Modal */}
       <AnimatePresence>
@@ -1373,6 +2231,63 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Paper Type Form Modal */}
+      <AnimatePresence>
+        {isPaperTypeFormOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsPaperTypeFormOpen(false)}
+              className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm"
+            />
+            
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm max-h-[85vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-2xl font-bold tracking-tight">
+                  New Paper Type
+                </h2>
+              </div>
+
+              <form onSubmit={async (e) => {
+                e.preventDefault();
+                if (paperTypeFormData.name.trim()) {
+                  await handleAddPaperType(paperTypeFormData.name.trim());
+                  setIsPaperTypeFormOpen(false);
+                  setPaperTypeFormData({ name: "" });
+                }
+              }} className="space-y-4 md:space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Type Name</label>
+                  <div className="relative">
+                    <FileText size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="text"
+                      value={paperTypeFormData.name} onChange={e => setPaperTypeFormData({ name: e.target.value })}
+                      className="w-full pl-11 pr-4 py-2.5 md:py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-slate-900 dark:text-white placeholder:text-slate-400 transition-all"
+                      placeholder="e.g. Mids, Finals"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 flex gap-3">
+                  <button type="button" onClick={() => setIsPaperTypeFormOpen(false)} className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-900 dark:text-white transition-colors">
+                    Cancel
+                  </button>
+                  <button type="submit" className="flex-1 py-2.5 md:py-3 rounded-2xl font-medium bg-red-600 text-white shadow-md hover:scale-[1.02] active:scale-[0.98] transition-transform flex items-center justify-center gap-2">
+                    Create
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirm && (
@@ -1414,6 +2329,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     if (deleteConfirm.type === 'class') confirmDeleteClass(deleteConfirm.id);
+                    else if (deleteConfirm.type === 'paperType') confirmDeletePaperType(deleteConfirm.id);
                     else if (deleteConfirm.type === 'entry') confirmDeleteEntry(deleteConfirm.id);
                     else if (deleteConfirm.type === 'allRecords') confirmDeleteAllRecords(deleteConfirm.id);
                     else if (deleteConfirm.type === 'allGlobalExams') confirmDeleteAllGlobalExams();

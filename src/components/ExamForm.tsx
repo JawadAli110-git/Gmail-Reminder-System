@@ -54,6 +54,10 @@ export function ExamForm({ isOpen, onClose, onSubmit, isSubmitting, examToEdit }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.invigilators || formData.invigilators.length === 0) {
+      alert("Please add at least one invigilator.");
+      return;
+    }
     onSubmit(formData);
   };
 

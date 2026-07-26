@@ -1,23 +1,19 @@
 import React from 'react';
-import type { TimetableEntry, ExamEntry } from '../types';
+import type { TimetableEntry } from '../types';
 
-export function TimetablePreview({ classEntries, classExams }: { classEntries: TimetableEntry[], classExams: ExamEntry[] }) {
+export function TimetablePreview({ classEntries }: { classEntries: TimetableEntry[] }) {
   const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
   
   const emptyDays = new Set<string>();
   daysOfWeek.forEach(day => {
     const hasClasses = classEntries.some(e => e.days?.includes(day) || e.days?.includes('Daily'));
-    const hasExams = classExams.some(e => {
-        const dateObj = new Date(e.date);
-        const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        return daysArr[dateObj.getDay()] === day;
-    });
-    if (!hasClasses && !hasExams) emptyDays.add(day);
+    
+    if (!hasClasses ) emptyDays.add(day);
   });
 
   const allTimes = new Set<string>();
   classEntries.forEach(e => allTimes.add(e.time));
-  classExams.forEach(e => allTimes.add(e.time));
+  
   
   const timesArray = Array.from(allTimes).sort((a, b) => {
     const parseTime = (t: string) => {
@@ -101,30 +97,6 @@ export function TimetablePreview({ classEntries, classExams }: { classEntries: T
                   }
                 }
                 
-                const dayExams = classExams.filter(e => {
-                  if (e.time !== time) return false;
-                  const dateObj = new Date(e.date);
-                  const daysArr = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-                  return daysArr[dateObj.getDay()] === day;
-                });
-                
-                if (dayExams.length > 0) {
-                  if (cellText) cellText += "\n";
-                  cellText += dayExams.map(e => `[EXAM]\n${e.subject.toUpperCase()}`).join("\n");
-                  const examWithEnd = dayExams.find(e => e.endTime);
-                  if (examWithEnd) {
-                      let span = 1;
-                      for (let i = rowIndex + 1; i < timesArray.length; i++) {
-                          if (timesArray[i] < examWithEnd.endTime) {
-                              span++;
-                          } else {
-                              break;
-                          }
-                      }
-                      maxRowSpan = Math.max(maxRowSpan, span);
-                  }
-                }
-
                 if (!cellText) {
                   return (
                     <td key={day} className="text-center p-3 border border-slate-200 dark:border-slate-700 text-slate-500">

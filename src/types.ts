@@ -34,6 +34,8 @@ export interface Invigilator {
   email: string;
 }
 
+export interface PaperType { id: string; name: string; }
+
 export interface ExamEntry {
   id: string;
   subject: string;
@@ -41,6 +43,7 @@ export interface ExamEntry {
   time: string; // HH:MM
   endTime?: string;
   classId?: string;
+  paperTypeId?: string;
   invigilators: Invigilator[];
 }
 
