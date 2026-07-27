@@ -131,7 +131,7 @@ const ai = new GoogleGenAI({
   },
 });
 
-let emailLogs: { id: string, timestamp: string, teacherEmail: string, subject: string, status: 'success' | 'error', details?: string }[] = [];
+
 
 async function getClasses() {
   const snap = await getDocs(collection(db, "classes"));
@@ -242,7 +242,7 @@ cron.schedule("* * * * *", async () => {
             text: `Dear ${entry.teacherName},\n\nThis is an automated reminder that your class for ${entry.subject} is starting at ${formatTimeAmPm(entry.time)}.\n\nBest regards,\nAdmin System`,
           };
           await transporter.sendMail(mailOptions);
-          emailLogs.unshift({
+          await addDoc(collection(db, "logs"), {
             id: Date.now().toString() + Math.random().toString(),
             timestamp: new Date().toISOString(),
             teacherEmail: entry.teacherEmail,
@@ -259,7 +259,7 @@ cron.schedule("* * * * *", async () => {
                 text: `Dear ${entry.taName},\n\nThis is an automated reminder that your TA duty for ${entry.subject} with ${entry.teacherName} is starting at ${formatTimeAmPm(entry.time)}.\n\nBest regards,\nAdmin System`,
               };
               await transporter.sendMail(taMailOptions);
-              emailLogs.unshift({
+              await addDoc(collection(db, "logs"), {
                 id: Date.now().toString() + Math.random().toString(),
                 timestamp: new Date().toISOString(),
                 teacherEmail: entry.taEmail + " (TA)",
@@ -267,7 +267,7 @@ cron.schedule("* * * * *", async () => {
                 status: 'success'
               });
             } catch (taError: any) {
-              emailLogs.unshift({
+              await addDoc(collection(db, "logs"), {
                 id: Date.now().toString() + Math.random().toString(),
                 timestamp: new Date().toISOString(),
                 teacherEmail: entry.taEmail + " (TA)",
@@ -278,7 +278,7 @@ cron.schedule("* * * * *", async () => {
             }
           }
         } catch (error: any) {
-          emailLogs.unshift({
+          await addDoc(collection(db, "logs"), {
             id: Date.now().toString() + Math.random().toString(),
             timestamp: new Date().toISOString(),
             teacherEmail: entry.teacherEmail,
@@ -305,7 +305,7 @@ cron.schedule("* * * * *", async () => {
               text: `Dear ${invigilator.name},\n\nThis is an automated reminder that you have an invigilation duty for ${exam.subject} starting at ${formatTimeAmPm(exam.time)}.\n\nBest regards,\nAdmin System`,
             };
             await transporter.sendMail(mailOptions);
-            emailLogs.unshift({
+            await addDoc(collection(db, "logs"), {
               id: Date.now().toString() + Math.random().toString(),
               timestamp: new Date().toISOString(),
               teacherEmail: invigilator.email,
@@ -313,7 +313,7 @@ cron.schedule("* * * * *", async () => {
               status: 'success'
             });
           } catch (error: any) {
-            emailLogs.unshift({
+            await addDoc(collection(db, "logs"), {
               id: Date.now().toString() + Math.random().toString(),
               timestamp: new Date().toISOString(),
               teacherEmail: invigilator.email,
@@ -327,7 +327,7 @@ cron.schedule("* * * * *", async () => {
     }
   }
 
-  if (emailLogs.length > 50) emailLogs = emailLogs.slice(0, 50);
+  
 });
 
 
@@ -635,8 +635,16 @@ app.delete("/api/exams/:id", authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
-app.get("/api/logs", (req, res) => {
-  res.json(emailLogs);
+app.get("/api/logs", async (req, res) => {
+  try {
+    const snap = await getDocs(collection(db, "logs"));
+    let logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    logs.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    res.json(logs.slice(0, 100));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to fetch logs" });
+  }
 });
 
 // Chatbot API

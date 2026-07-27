@@ -41,7 +41,7 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (response.status === 401 && !urlString.includes('/api/auth/login')) {
     localStorage.removeItem('adminToken');
     window.location.href = '/';
-    return new Promise(() => {});
+    return new Promise<Response>(() => {});
   }
   return response;
 };
@@ -61,6 +61,34 @@ export default function App() {
   
   const [logs, setLogs] = useState<EmailLog[]>([]);
   const [isDark, setIsDark] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+
+  useEffect(() => {
+    if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone) {
+      setIsStandalone(true);
+    }
+
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallClick = () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      });
+    } else {
+      showToast("Install App", "To install, tap 'Share' then 'Add to Home Screen' (iOS) or click the install icon in your browser address bar.", "success");
+    }
+  };
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isClassFormOpen, setIsClassFormOpen] = useState(false);
@@ -1220,6 +1248,15 @@ export default function App() {
             </div>
             )}
 
+            {!isStandalone && (
+              <button
+                onClick={handleInstallClick}
+                className="p-3 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors shadow-sm shrink-0"
+                title="Install App"
+              >
+                <Download size={20} />
+              </button>
+            )}
             <button
               onClick={toggleTheme}
               className="p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm shrink-0"
