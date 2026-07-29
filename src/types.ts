@@ -47,3 +47,16 @@ export interface ExamEntry {
   invigilators: Invigilator[];
 }
 
+
+
+export interface ChatMessage {
+  id: string;
+  text: string;
+  senderEmail: string;
+  senderName: string;
+  senderRole: 'admin' | 'user';
+  receiverEmail: string;
+  timestamp: string;
+  readByAdmin: boolean;
+  readByUser: boolean;
+}

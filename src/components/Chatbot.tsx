@@ -64,10 +64,10 @@ export function Chatbot({ onClose }: { onClose: () => void }) {
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 50, scale: 0.95 }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className="fixed bottom-6 right-6 w-[350px] sm:w-[400px] h-[500px] liquid-glass-heavy rounded-3xl flex flex-col overflow-hidden z-50 shadow-2xl text-slate-900 dark:text-white bg-slate-50/95 dark:bg-black/80 backdrop-blur-xl border border-white/40 dark:border-white/10"
+        className="fixed top-0 left-0 right-0 bottom-0 sm:top-auto sm:left-auto sm:bottom-6 sm:right-6 w-full sm:w-[400px] h-[100dvh] sm:h-[600px] sm:max-h-[85vh] sm:rounded-3xl flex flex-col overflow-hidden z-50 shadow-2xl text-slate-900 dark:text-white bg-slate-50/95 dark:bg-black/80 backdrop-blur-xl border-0 sm:border border-white/40 dark:border-white/10"
       >
       {/* Header */}
-      <div className="px-6 py-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between bg-white/60 dark:bg-black/40 text-slate-900 dark:text-white">
+      <div className="px-6 py-4 pt-12 sm:pt-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between bg-white/60 dark:bg-black/40 text-slate-900 dark:text-white">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-full bg-blue-500/20 text-blue-600 flex items-center justify-center">
             <Bot size={18} />
@@ -116,7 +116,7 @@ export function Chatbot({ onClose }: { onClose: () => void }) {
       </div>
 
       {/* Input */}
-      <div className="p-4 bg-white/60 dark:bg-black/40 border-t border-black/5 dark:border-white/5">
+      <div className="p-4 pb-12 sm:pb-4 bg-white/60 dark:bg-black/40 border-t border-black/5 dark:border-white/5">
         <div className="relative flex items-center">
           <input
             type="text"

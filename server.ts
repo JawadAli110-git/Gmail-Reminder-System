@@ -17,6 +17,60 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 
+const APP_VERSION = "v2.0";
+const CHANGELOG_MESSAGE = `🎉 App Updated to Version ${APP_VERSION}!
+
+What's New (User Features):
+- Real-time automated update notifications
+- AI Assistant improvements for better scheduling
+- Read receipts completely remove unread marks automatically
+- App icon badges for unread messages (on supported devices)
+- Major UI and UX refinements
+
+Enjoy the update!`;
+
+(async () => {
+  try {
+    const versionDoc = await getDoc(doc(db, "app_settings", "version"));
+    let lastVersion = "v1.0";
+    if (versionDoc.exists()) {
+      lastVersion = versionDoc.data().currentVersion;
+    }
+    
+    if (lastVersion !== APP_VERSION) {
+      console.log(`Upgrading from ${lastVersion} to ${APP_VERSION}, broadcasting update...`);
+      
+      const usersRef = collection(db, "users");
+      const q = await getDocs(usersRef);
+      const userEmails = q.docs.map(d => d.data().email);
+      
+      const now = new Date().toISOString();
+      
+      for (const email of userEmails) {
+          if (email === 'admin@example.com' || email === 'jawadali.syed.110@gmail.com') continue; // Skip admin
+          const msgData = {
+            text: CHANGELOG_MESSAGE,
+            senderEmail: 'admin@example.com',
+            senderName: 'Admin (System)',
+            senderRole: 'admin',
+            receiverEmail: email,
+            timestamp: now,
+            readByAdmin: true,
+            readByUser: false
+          };
+          await addDoc(collection(db, "messages"), msgData);
+      }
+      
+      await setDoc(doc(db, "app_settings", "version"), { currentVersion: APP_VERSION });
+      console.log("Broadcast complete.");
+    }
+  } catch (err) {
+    console.error("Failed to run version update broadcast:", err);
+  }
+})();
+
+
+
 const app = express();
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -48,7 +102,7 @@ async function initAdmin() {
     });
   }
 }
-initAdmin();
+initAdmin().catch(console.error);
 
 app.post("/api/auth/login", async (req, res) => {
    const { username, password } = req.body;
@@ -56,7 +110,7 @@ app.post("/api/auth/login", async (req, res) => {
    if (adminDoc.exists()) {
       const data = adminDoc.data();
       if (data.username === username && data.password === hashPassword(password)) {
-         const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
+         const token = jwt.sign({ username, role: 'admin', email: data.email || 'admin@example.com' }, JWT_SECRET, { expiresIn: "365d" });
          return res.json({ success: true, token });
       }
    }
@@ -337,12 +391,12 @@ async function getSettings() {
   return snap.docs[0].data();
 }
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ error: "Missing authorization header" });
   const token = authHeader.split(" ")[1];
   try {
-    jwt.verify(token, JWT_SECRET);
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (err) {
     return res.status(401).json({ error: "Invalid or expired token" });
@@ -635,10 +689,150 @@ app.delete("/api/exams/:id", authMiddleware, async (req, res) => {
   res.json({ success: true });
 });
 
+
+// User Auth Endpoints
+
+app.post("/api/users/send-verification", async (req, res) => {
+   try {
+       const { email } = req.body;
+       if (!email) return res.status(400).json({ error: "Email is required" });
+       
+       const usersRef = collection(db, "users");
+       const q = await getDocs(usersRef);
+       const existing = q.docs.find(d => d.data().email === email);
+       if (existing) return res.status(400).json({ error: "Email already registered" });
+       
+       const code = Math.floor(100000 + Math.random() * 900000).toString();
+       await setDoc(doc(db, "verificationCodes", email), {
+           code,
+           createdAt: new Date().toISOString()
+       });
+       
+       await transporter.sendMail({
+           from: process.env.EMAIL_USER || "noreply@example.com",
+           to: email,
+           subject: "Your Registration Verification Code",
+           text: `Your verification code is: ${code}`
+       });
+       
+       res.json({ success: true });
+   } catch (e: any) {
+       res.status(500).json({ error: e.message });
+   }
+});
+
+app.post("/api/users/register", async (req, res) => {
+   try {
+       const { name, email, password, code } = req.body;
+       if (!name || !email || !password || !code) return res.status(400).json({ error: "All fields are required" });
+       
+       const codeDoc = await getDoc(doc(db, "verificationCodes", email));
+       if (!codeDoc.exists() || codeDoc.data().code !== code) {
+           return res.status(400).json({ error: "Invalid verification code" });
+       }
+       
+       const usersRef = collection(db, "users");
+       const q = await getDocs(usersRef);
+       const existing = q.docs.find(d => d.data().email === email);
+       if (existing) return res.status(400).json({ error: "Email already registered" });
+
+       const hashedPassword = hashPassword(password);
+       await addDoc(usersRef, {
+           name,
+           email,
+           password: hashedPassword,
+           createdAt: new Date().toISOString()
+       });
+       
+       const token = jwt.sign({ email, role: 'user' }, JWT_SECRET, { expiresIn: "365d" });
+       res.json({ success: true, token, user: { name, email } });
+   } catch (e: any) {
+       res.status(500).json({ error: e.message });
+   }
+});
+
+app.post("/api/users/login", async (req, res) => {
+   try {
+       const { email, password } = req.body;
+       const usersRef = collection(db, "users");
+       const q = await getDocs(usersRef);
+       const userDoc = q.docs.find(d => d.data().email === email && d.data().password === hashPassword(password));
+       
+       if (userDoc) {
+           const token = jwt.sign({ email, role: 'user' }, JWT_SECRET, { expiresIn: "365d" });
+           res.json({ success: true, token, user: { name: userDoc.data().name, email: userDoc.data().email } });
+       } else {
+           res.status(401).json({ error: "Invalid credentials" });
+       }
+   } catch (e: any) {
+       res.status(500).json({ error: e.message });
+   }
+});
+
+app.post("/api/users/forgot-password", async (req, res) => {
+   try {
+       const { email } = req.body;
+       const usersRef = collection(db, "users");
+       const q = await getDocs(usersRef);
+       const userDoc = q.docs.find(d => d.data().email === email);
+       
+       if (userDoc) {
+           const code = Math.floor(100000 + Math.random() * 900000).toString();
+           await updateDoc(doc(db, "users", userDoc.id), { resetCode: code, resetCodeExpiry: Date.now() + 15 * 60 * 1000 });
+           
+           if (process.env.EMAIL_USER && process.env.EMAIL_APP_PASSWORD) {
+               await transporter.sendMail({
+                   from: process.env.EMAIL_USER,
+                   to: email,
+                   subject: "Password Reset Code",
+                   text: `Your password reset code is: ${code}. It will expire in 15 minutes.`
+               });
+           }
+           res.json({ success: true });
+       } else {
+           res.status(404).json({ error: "User not found" });
+       }
+   } catch (e: any) {
+       res.status(500).json({ error: e.message });
+   }
+});
+
+app.post("/api/users/reset-password", async (req, res) => {
+   try {
+       const { email, code, newPassword } = req.body;
+       const usersRef = collection(db, "users");
+       const q = await getDocs(usersRef);
+       const userDoc = q.docs.find(d => d.data().email === email);
+       
+       if (userDoc) {
+           const data = userDoc.data();
+           if (data.resetCode === code && data.resetCodeExpiry && data.resetCodeExpiry > Date.now()) {
+               await updateDoc(doc(db, "users", userDoc.id), {
+                   password: hashPassword(newPassword),
+                   resetCode: null,
+                   resetCodeExpiry: null
+               });
+               res.json({ success: true });
+           } else {
+               res.status(400).json({ error: "Invalid or expired code" });
+           }
+       } else {
+           res.status(404).json({ error: "User not found" });
+       }
+   } catch (e: any) {
+       res.status(500).json({ error: e.message });
+   }
+});
+
 app.get("/api/logs", async (req, res) => {
   try {
     const snap = await getDocs(collection(db, "logs"));
     let logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    
+    // Only return logs for the current day
+    const todayStr = new Date().toISOString().split('T')[0];
+    logs = logs.filter((l: any) => l.timestamp && l.timestamp.startsWith(todayStr));
+    
     logs.sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     res.json(logs.slice(0, 100));
   } catch (e) {
@@ -646,6 +840,126 @@ app.get("/api/logs", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch logs" });
   }
 });
+
+
+// Messages API
+
+app.get("/api/app-info", (req, res) => {
+  res.json({
+    version: APP_VERSION,
+    changelog: "🎉 Recent User Features:\n- Real-time automated update notifications\n- Automated daily email logs cleanup to keep logs fresh\n- AI Assistant improvements for better scheduling & responsive UI\n- Badges for unread messages\n- Full responsive UI across devices & refined animations",
+    description: "Welcome to Acadamus! This platform provides multiple features for your ease:\n\n🤖 AI Assistant: A smart chatbot to help you query timetables, find specific classes, and answer general questions instantly.\n\n💬 Chat (Messages): A direct line to communicate with the administration for any requests or issues.\n\n📅 Schedule Check (Classes): View your daily timetable and keep track of your classes effortlessly.\n\n📄 Paper Check (Exams): Stay updated on your upcoming exams and assignments.\n\n📊 Dashboard: A quick overview of your activities and important metrics."
+  });
+});
+
+app.get("/api/messages", authMiddleware, async (req: any, res) => {
+  try {
+    const snap = await getDocs(collection(db, "messages"));
+    let messages = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const userRole = req.user.role || (req.user.username ? 'admin' : 'user');
+    const userEmail = req.user.email || (userRole === 'admin' ? 'admin@example.com' : 'user@example.com');
+    
+    if (userRole === 'user') {
+      messages = messages.filter((m: any) => m.senderEmail === userEmail || m.receiverEmail === userEmail);
+    }
+    messages.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    res.json(messages);
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/messages", authMiddleware, async (req: any, res) => {
+  try {
+    const { text, receiverEmail } = req.body;
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    
+    // Check rate limit for user
+    const userRole = req.user.role || (req.user.username ? 'admin' : 'user');
+    const userEmail = req.user.email || (userRole === 'admin' ? 'admin@example.com' : 'user@example.com');
+    
+    if (userRole === 'user') {
+      const snap = await getDocs(collection(db, "messages"));
+      const userMsgsToday = snap.docs.filter(d => {
+        const data = d.data();
+        return data.senderEmail === userEmail && data.timestamp.startsWith(todayStr);
+      });
+      if (userMsgsToday.length >= 15) {
+        return res.status(429).json({ error: "Daily message limit (15) reached." });
+      }
+    }
+
+    const usersRef = collection(db, "users");
+    const q = await getDocs(usersRef);
+    const userDoc = q.docs.find(d => d.data().email === userEmail);
+    const senderName = userRole === 'admin' ? 'Admin' : (userDoc ? userDoc.data().name : 'Unknown User');
+
+    const msgData = {
+      text,
+      senderEmail: userEmail,
+      senderName,
+      senderRole: userRole,
+      receiverEmail: userRole === 'admin' ? receiverEmail : 'admin',
+      timestamp: now.toISOString(),
+      readByAdmin: userRole === 'admin',
+      readByUser: userRole === 'user'
+    };
+
+    const docRef = await addDoc(collection(db, "messages"), msgData);
+    res.json({ success: true, id: docRef.id });
+  } catch (e: any) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/messages/read", authMiddleware, async (req: any, res) => {
+  try {
+    const { otherUserEmail } = req.body;
+    const userRole = req.user.role || (req.user.username ? 'admin' : 'user');
+    const userEmail = req.user.email || (userRole === 'admin' ? 'admin@example.com' : 'user@example.com');
+    const snap = await getDocs(collection(db, "messages"));
+    
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (userRole === 'admin') {
+        if (data.senderEmail === otherUserEmail && !data.readByAdmin) {
+          await updateDoc(doc(db, "messages", d.id), { readByAdmin: true });
+        }
+      } else {
+        if (data.senderRole === 'admin' && data.receiverEmail === userEmail && !data.readByUser) {
+          await updateDoc(doc(db, "messages", d.id), { readByUser: true });
+        }
+      }
+    }
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Daily Cron Job for Message Cleanup
+cron.schedule("0 0 * * *", async () => {
+  try {
+    const snap = await getDocs(collection(db, "messages"));
+    for (const d of snap.docs) {
+      await deleteDoc(d.ref);
+    }
+    console.log("Daily messages cleanup completed.");
+    
+    // Cleanup logs as well
+    const logsSnap = await getDocs(collection(db, "logs"));
+    for (const d of logsSnap.docs) {
+      await deleteDoc(d.ref);
+    }
+    console.log("Daily email logs cleanup completed.");
+  } catch (err) {
+    console.error("Failed to clean up messages:", err);
+  }
+});
+
 
 // Chatbot API
 app.post("/api/chat", async (req, res) => {
@@ -746,4 +1060,4 @@ async function startServer() {
   });
 }
 
-startServer();
+startServer().catch(console.error);

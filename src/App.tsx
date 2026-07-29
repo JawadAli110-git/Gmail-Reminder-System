@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from "react";
 interface ConcurrentOption { day: string; time: string; endTime?: string; }
 import { motion, AnimatePresence } from "motion/react";
-import { Plus, Trash2, Edit2, Moon, Sun, Clock, BookOpen, User, Mail, Sparkles, Activity, GraduationCap, Calendar, Download, Printer, List, Calendar as CalendarIcon, FileText, Search, Lock, LogIn, KeyRound, LogOut, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, Edit2, Moon, Sun, Clock, BookOpen, User, Mail, Sparkles, Activity, GraduationCap, Calendar, Download, Printer, List, Calendar as CalendarIcon, FileText, Search, Lock, LogIn, KeyRound, LogOut, Eye, EyeOff, MessageSquare, Send, Check, X, Info } from "lucide-react";
 import { Chatbot } from "./components/Chatbot";
 import { ExamForm } from "./components/ExamForm";
 import { TimetablePreview } from "./components/TimetablePreview";
@@ -25,13 +25,13 @@ export const formatTimeAmPm = (time24?: string) => {
 };
 
 import { triggerHaptic, triggerHapticSuccess, triggerHapticError } from "./lib/haptics";
-import type { TimetableEntry, EmailLog, SchoolClass, ExamEntry, PaperType } from "./types";
+import type { TimetableEntry, EmailLog, SchoolClass, ExamEntry, PaperType, ChatMessage } from "./types";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-  const token = localStorage.getItem('adminToken');
+  const token = localStorage.getItem('adminToken') || localStorage.getItem('userToken');
   const headers = new Headers(init?.headers);
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -40,6 +40,8 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const urlString = typeof input === 'string' ? input : (input instanceof Request ? input.url : input.toString());
   if (response.status === 401 && !urlString.includes('/api/auth/login')) {
     localStorage.removeItem('adminToken');
+                localStorage.removeItem('userToken');
+                
     window.location.href = '/';
     return new Promise<Response>(() => {});
   }
@@ -96,6 +98,18 @@ export default function App() {
   const [paperTypeFormData, setPaperTypeFormData] = useState({ name: "" });
   const [isExamFormOpen, setIsExamFormOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
+
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
+  
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isAboutModalOpen, setIsAboutModalOpen] = useState(false);
+  const [appInfo, setAppInfo] = useState<any>(null);
+  const [selectedChatUser, setSelectedChatUser] = useState<string | null>(null);
+  const [newMessageText, setNewMessageText] = useState("");
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isComposingRequest, setIsComposingRequest] = useState(false);
+
   
   const [formData, setFormData] = useState<Partial<TimetableEntry>>({ days: ["Daily"] });
   const [additionalSessions, setAdditionalSessions] = useState<{day: string, time: string, endTime?: string}[]>([]);
@@ -111,6 +125,10 @@ export default function App() {
   
   // Auth & User View States
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isUser, setIsUser] = useState(false);
+  const [userAuthMode, setUserAuthMode] = useState<"login" | "register" | "forgot" | "reset" | "verify-signup">("login");
+  const [userAuthForm, setUserAuthForm] = useState({ name: "", email: "", password: "", code: "", newPassword: "" });
+  const [isUserAuthenticating, setIsUserAuthenticating] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [authForm, setAuthForm] = useState({ username: '', password: '', code: '', newPassword: '', confirmPassword: '' });
   const [authMode, setAuthMode] = useState<'login' | 'forgot' | 'reset'>('login');
@@ -540,12 +558,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    const token = localStorage.getItem("adminToken");
-    if (token) {
-      setIsAdmin(true);
-    } else {
-      setIsAdmin(false);
-    }
+    const adminToken = localStorage.getItem("adminToken");
+    if (adminToken) setIsAdmin(true);
+    else setIsAdmin(false);
+    
+    const userToken = localStorage.getItem("userToken");
+    if (userToken) setIsUser(true);
+    else setIsUser(false);
+    
     fetchEntries();
     fetchClasses();
     fetchExams();
@@ -556,6 +576,78 @@ export default function App() {
       document.documentElement.classList.add('dark');
     }
   }, []);
+
+
+  const handleUserAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsUserAuthenticating(true);
+    triggerHaptic();
+
+    try {
+      if (userAuthMode === 'register') {
+        if (userAuthForm.password !== (userAuthForm as any).confirmPassword) {
+            showToast("Error", "Passwords do not match", "error");
+            triggerHapticError();
+            setIsUserAuthenticating(false);
+            return;
+        }
+        
+        // Send verification code
+        const res = await window.fetch('/api/users/send-verification', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userAuthForm.email })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            showToast("Success", "Verification code sent to your email", "success");
+            setUserAuthMode('verify-signup');
+        } else {
+            showToast("Error", data.error || "Failed to send code", "error");
+            triggerHapticError();
+        }
+        
+      } else if (userAuthMode === 'verify-signup') {
+        
+        // Verify code and register
+        const res = await window.fetch('/api/users/register', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: userAuthForm.name, email: userAuthForm.email, password: userAuthForm.password, code: userAuthForm.code })
+        });
+        const data = await res.json();
+        if (data.success) {
+          localStorage.setItem('userToken', data.token);
+          setIsUser(true);
+          showToast("Success", "Account created successfully", "success");
+          triggerHapticSuccess();
+        } else {
+          showToast("Error", data.error || "Registration failed", "error");
+          triggerHapticError();
+        }
+        
+      } else if (userAuthMode === 'login') {
+        const res = await window.fetch('/api/users/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: userAuthForm.email, password: userAuthForm.password })
+        });
+        const data = await res.json();
+        if (data.success) {
+          localStorage.setItem('userToken', data.token);
+          setIsUser(true);
+          showToast("Success", "Logged in successfully", "success");
+          triggerHapticSuccess();
+        } else {
+          showToast("Error", data.error || "Login failed", "error");
+          triggerHapticError();
+        }
+      }
+    } catch (error) {
+        showToast("Error", "Authentication error", "error");
+        triggerHapticError();
+    } finally {
+        setIsUserAuthenticating(false);
+    }
+  };
 
   const toggleTheme = () => {
     triggerHaptic();
@@ -653,6 +745,90 @@ export default function App() {
       fetchLogs();
     }
   }, [isLogsOpen]);
+
+
+  const fetchMessages = async () => {
+    try {
+      const res = await customFetch("/api/messages");
+      const data = await res.json();
+      setMessages(data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    if (isAdmin || isUser) {
+      fetchMessages();
+      // Poll every 30 seconds
+      const interval = setInterval(fetchMessages, 30000);
+      return () => clearInterval(interval);
+    }
+  }, [isAdmin, isUser]);
+
+  
+  
+
+  
+  
+  useEffect(() => {
+    fetch('/api/app-info').then(res => res.json()).then(data => setAppInfo(data)).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    if ('setAppBadge' in navigator && 'clearAppBadge' in navigator) {
+      if (isAdmin) {
+        const unreadCount = messages.filter((m: any) => !m.readByAdmin).length;
+        if (unreadCount > 0) {
+          (navigator as any).setAppBadge(unreadCount).catch(console.error);
+        } else {
+          (navigator as any).clearAppBadge().catch(console.error);
+        }
+      } else if (isUser) {
+        const unreadCount = messages.filter((m: any) => !m.readByUser).length;
+        if (unreadCount > 0) {
+          (navigator as any).setAppBadge(unreadCount).catch(console.error);
+        } else {
+          (navigator as any).clearAppBadge().catch(console.error);
+        }
+      }
+    }
+  }, [messages, isAdmin, isUser]);
+
+  const handleSendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessageText.trim()) {
+      showToast("Error", "Message cannot be empty", "error");
+      return;
+    }
+    
+    setIsSendingMessage(true);
+    triggerHaptic();
+
+    try {
+      const res = await customFetch('/api/messages', {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          text: newMessageText, 
+          receiverEmail: isAdmin ? selectedChatUser : 'admin' 
+        })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setNewMessageText("");
+        fetchMessages();
+      } else {
+        showToast("Error", data.error || "Failed to send message.", "error");
+      }
+    } catch (err) {
+      showToast("Error", "Failed to send message.", "error");
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
 
   const handleAddClass = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1124,6 +1300,271 @@ export default function App() {
     return acc;
   }, {} as Record<string, TimetableEntry[]>);
 
+
+  if (!isAdmin && !isUser) {
+    return (
+      <div className={`min-h-screen relative flex items-center justify-center p-6 transition-colors duration-500 ${isDark ? 'dark bg-slate-950 text-slate-50' : 'bg-slate-50 text-slate-900'}`}>
+        <div className="fixed inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] rounded-full bg-blue-400/20 dark:bg-blue-600/20 blur-[100px]" />
+          <div className="absolute top-[40%] -right-[10%] w-[60%] h-[60%] rounded-full bg-purple-400/20 dark:bg-purple-900/20 blur-[120px]" />
+        </div>
+        
+        <AnimatePresence>
+          {toastMessage && (
+            <motion.div
+              initial={{ opacity: 0, y: -50 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -50 }}
+              className={`fixed top-6 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 backdrop-blur-xl border ${toastMessage.type === 'error' ? 'bg-red-500/90 text-white border-red-400' : 'bg-green-500/90 text-white border-green-400'}`}
+            >
+              <span className="font-semibold">{toastMessage.title}:</span> {toastMessage.message}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <button onClick={toggleTheme} className="absolute top-6 right-6 p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm z-50">
+           {isDark ? <Sun size={20} /> : <Moon size={20} />}
+        </button>
+
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="relative w-full max-w-md liquid-glass-heavy rounded-3xl p-8 shadow-2xl"
+        >
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg text-white">
+              <GraduationCap size={32} />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">Welcome to Timetable</h1>
+            <p className="text-slate-500 mt-2">
+               {userAuthMode === 'login' ? 'Sign in to your account' : 
+                userAuthMode === 'register' ? 'Create a new account' :
+                userAuthMode === 'forgot' ? 'Reset your password' : 'Enter new password'}
+            </p>
+          </div>
+
+          <form onSubmit={handleUserAuthSubmit} className="space-y-4">
+            {userAuthMode === 'register' && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Name</label>
+                <input type="text" required value={userAuthForm.name} onChange={e => setUserAuthForm({...userAuthForm, name: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2" placeholder="John Doe" />
+              </div>
+            )}
+            
+            {(userAuthMode === 'login' || userAuthMode === 'register' || userAuthMode === 'forgot' || userAuthMode === 'reset') && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Email</label>
+                <input type="email" required value={userAuthForm.email} onChange={e => setUserAuthForm({...userAuthForm, email: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2" placeholder="you@example.com" />
+              </div>
+            )}
+
+            {userAuthMode === 'reset' && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Reset Code</label>
+                <input type="text" required value={userAuthForm.code} onChange={e => setUserAuthForm({...userAuthForm, code: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2" placeholder="6-digit code" />
+              </div>
+            )}
+            
+            {userAuthMode === 'verify-signup' && (
+              <div>
+                <label className="block text-sm font-medium mb-1">Verification Code</label>
+                <input type="text" required value={userAuthForm.code} onChange={e => setUserAuthForm({...userAuthForm, code: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2" placeholder="Enter code from email" />
+              </div>
+            )}
+
+            {(userAuthMode === 'login' || userAuthMode === 'register') && (
+              <div>
+                <div className="flex justify-between mb-1">
+                  <label className="block text-sm font-medium">Password</label>
+                  {userAuthMode === 'login' && (
+                    <button type="button" onClick={() => setUserAuthMode('forgot')} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">Forgot?</button>
+                  )}
+                </div>
+                <div className="relative">
+                  <input type={showPassword ? "text" : "password"} required value={userAuthForm.password} onChange={e => setUserAuthForm({...userAuthForm, password: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2 pr-10" placeholder="••••••••" />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                    {showPassword ? <EyeOff size={16}/> : <Eye size={16}/>}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {(userAuthMode === 'register' || userAuthMode === 'reset') && (
+               <>
+                 {userAuthMode === 'reset' && (
+                   <div>
+                      <label className="block text-sm font-medium mb-1">New Password</label>
+                      <div className="relative">
+                        <input type={showNewPassword ? "text" : "password"} required value={userAuthForm.newPassword} onChange={e => setUserAuthForm({...userAuthForm, newPassword: e.target.value})} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2 pr-10" placeholder="••••••••" />
+                        <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                          {showNewPassword ? <EyeOff size={16}/> : <Eye size={16}/>}
+                        </button>
+                      </div>
+                   </div>
+                 )}
+                 <div>
+                    <label className="block text-sm font-medium mb-1">Confirm Password</label>
+                    <div className="relative">
+                      <input type={showConfirmPassword ? "text" : "password"} required value={(userAuthForm as any).confirmPassword || ''} onChange={e => setUserAuthForm({...userAuthForm, confirmPassword: e.target.value} as any)} className="w-full bg-white/50 dark:bg-black/50 border border-black/10 dark:border-white/10 rounded-xl px-4 py-2 pr-10" placeholder="••••••••" />
+                      <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                        {showConfirmPassword ? <EyeOff size={16}/> : <Eye size={16}/>}
+                      </button>
+                    </div>
+                 </div>
+               </>
+            )}
+
+            <button type="submit" disabled={isUserAuthenticating} className="w-full py-3 mt-4 rounded-xl font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+              {isUserAuthenticating ? 'Please wait...' : 
+               userAuthMode === 'login' ? 'Sign In' : 
+               userAuthMode === 'register' ? 'Create Account' :
+               userAuthMode === 'verify-signup' ? 'Verify Account' : userAuthMode === 'forgot' ? 'Send Reset Code' : 'Reset Password'}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center text-sm">
+            {userAuthMode === 'login' ? (
+              <p>Don't have an account? <button onClick={() => setUserAuthMode('register')} className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">Sign up</button></p>
+            ) : (
+              <p>Already have an account? <button onClick={() => setUserAuthMode('login')} className="font-semibold text-blue-600 dark:text-blue-400 hover:underline">Sign in</button></p>
+            )}
+          </div>
+          
+          <div className="mt-8 pt-6 border-t border-black/10 dark:border-white/10 text-center">
+             <button onClick={() => setIsLoginOpen(true)} className="text-sm font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors flex items-center justify-center gap-2 mx-auto">
+                <Lock size={14}/> Admin Login
+             </button>
+          </div>
+        </motion.div>
+
+        
+        {/* Auth Modal */}
+      <AnimatePresence>
+        {isLoginOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setIsLoginOpen(false)}
+              className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
+            />
+            
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-sm max-h-[85vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-5 sm:p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white flex flex-col"
+            >
+              <div className="w-16 h-16 mx-auto mb-6 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center">
+                {authMode === 'login' ? <Lock size={32} /> : <KeyRound size={32} />}
+              </div>
+              <h2 className="text-2xl font-bold tracking-tight mb-6 text-center">
+                {authMode === 'login' ? 'Admin Login' : authMode === 'forgot' ? 'Reset Password' : 'New Password'}
+              </h2>
+
+              <form onSubmit={handleAuth} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{authMode === 'login' ? 'Username / Email' : 'Email'}</label>
+                  <div className="relative">
+                    <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input 
+                      required type="text"
+                      disabled={authMode === 'reset'}
+                      value={authForm.username} onChange={e => setAuthForm({...authForm, username: e.target.value})}
+                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
+                      placeholder={authMode === 'login' ? 'admin' : 'admin@example.com'}
+                    />
+                  </div>
+                </div>
+
+                {authMode === 'login' && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Password</label>
+                    <div className="relative">
+                      <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <input 
+                        required type={showPassword ? "text" : "password"}
+                        value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}
+                        className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                        placeholder="••••••••"
+                      />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                    <div className="text-right mt-2">
+                      <button type="button" onClick={() => setAuthMode('forgot')} className="text-sm text-blue-600 hover:text-blue-700 font-medium">Forgot Password?</button>
+                    </div>
+                  </div>
+                )}
+
+                {authMode === 'reset' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">6-Digit Code</label>
+                      <div className="relative">
+                        <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type="text"
+                          value={authForm.code} onChange={e => setAuthForm({...authForm, code: e.target.value})}
+                          className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="123456"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">New Password</label>
+                      <div className="relative">
+                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type={showNewPassword ? "text" : "password"}
+                          value={authForm.newPassword} onChange={e => setAuthForm({...authForm, newPassword: e.target.value})}
+                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="••••••••"
+                        />
+                        <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                          {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Confirm Password</label>
+                      <div className="relative">
+                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+                        <input 
+                          required type={showConfirmPassword ? "text" : "password"}
+                          value={authForm.confirmPassword} onChange={e => setAuthForm({...authForm, confirmPassword: e.target.value})}
+                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
+                          placeholder="••••••••"
+                        />
+                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
+                          {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="pt-4 flex gap-3">
+                  <button type="button" disabled={isAuthenticating} onClick={() => {
+                      if (authMode !== 'login') setAuthMode('login');
+                      else setIsLoginOpen(false);
+                    }} 
+                    className="flex-1 py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-900 dark:text-slate-200 transition-colors"
+                  >
+                    {authMode !== 'login' ? 'Back' : 'Cancel'}
+                  </button>
+                  <button type="submit" disabled={isAuthenticating} className="flex-1 py-3 rounded-2xl font-medium bg-blue-600 text-white shadow-md hover:bg-blue-700 transition-colors flex justify-center items-center gap-2 disabled:opacity-50">
+                    {isAuthenticating && <Sparkles size={16} className="animate-pulse" />}
+                    {authMode === 'login' ? 'Login' : authMode === 'forgot' ? 'Send Code' : 'Reset'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+</div>
+    );
+  }
+
   return (
     <div className="min-h-screen relative pb-32 text-slate-900 dark:text-slate-50 bg-slate-50 dark:bg-slate-950 transition-colors duration-500">
       {/* Background gradients for Liquid Glass effect */}
@@ -1232,22 +1673,6 @@ export default function App() {
               </button>
             )}
 
-{isAdmin && (
-            <div className="flex items-center gap-2 px-3 py-2.5 rounded-full liquid-glass shadow-sm shrink-0">
-              <Clock size={16} className="text-slate-500" />
-              <select
-                value={reminderOffset}
-                onChange={(e) => updateSettings(Number(e.target.value))}
-                className="bg-transparent text-sm font-medium text-slate-700 dark:text-slate-300 focus:outline-none appearance-none cursor-pointer"
-                title="2nd Reminder Time"
-              >
-                <option value={180}>3h before</option>
-                <option value={240}>4h before</option>
-                <option value={300}>5h before</option>
-              </select>
-            </div>
-            )}
-
             {!isStandalone && (
               <button
                 onClick={handleInstallClick}
@@ -1257,47 +1682,141 @@ export default function App() {
                 <Download size={20} />
               </button>
             )}
-            <button
-              onClick={toggleTheme}
-              className="p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm shrink-0"
-              title="Toggle Theme"
-            >
-              {isDark ? <Sun size={20} /> : <Moon size={20} />}
-            </button>
-            {!isAdmin && (
+
+            {isUser && !isAdmin && (
               <button
-                onClick={() => setIsLoginOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors shadow-sm shrink-0"
-                title="Admin Login"
+                onClick={() => {
+                  triggerHaptic();
+                  setIsRequestsModalOpen(true);
+                  if (isUser && !isAdmin) {
+                      customFetch('/api/messages/read', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ otherUserEmail: 'admin' })
+                      }).then(() => fetchMessages()).catch(console.error);
+                  }
+                }}
+                className="p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm relative shrink-0"
+                title="Chat with Admin"
               >
-                <LogIn size={18} />
-                <span className="hidden sm:inline">Admin Login</span>
+                <MessageSquare size={20} />
+                {messages.filter(r => r.readByUser === false).length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-[10px] font-bold text-white">
+                    {messages.filter(r => r.readByUser === false).length}
+                  </span>
+                )}
               </button>
             )}
-            
-{isAdmin && <button
-              onClick={() => {
-                triggerHaptic();
-                setIsLogsOpen(true);
-              }}
-              className="p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm shrink-0"
-              title="Email Logs"
-            >
-              <Activity size={20} />
-            </button>}
             {isAdmin && <button
               onClick={() => {
-                triggerHaptic();
-                setIsAdmin(false);
-                localStorage.removeItem('adminToken');
-                showToast("Success", "Logged out successfully", "success");
-              }}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-full font-medium bg-slate-100 dark:bg-slate-800/50 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors shadow-sm shrink-0"
-              title="Log Out"
+                  triggerHaptic();
+                  setIsRequestsModalOpen(true);
+                  if (isUser && !isAdmin) {
+                      customFetch('/api/messages/read', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ otherUserEmail: 'admin' })
+                      }).then(() => fetchMessages()).catch(console.error);
+                  }
+                }}
+              className="p-3 rounded-full liquid-glass hover:bg-white/80 dark:hover:bg-black/60 transition-colors shadow-sm relative shrink-0"
+              title="User Chats"
             >
-              <LogOut size={18} />
-              <span className="hidden sm:inline">Log Out</span>
+              <MessageSquare size={20} />
+              {(() => {
+                const unreadUsers = new Set(messages.filter(r => !r.readByAdmin).map(r => r.senderEmail));
+                return unreadUsers.size > 0 ? (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full border-2 border-white dark:border-black flex items-center justify-center text-[10px] font-bold text-white">
+                    {unreadUsers.size}
+                  </span>
+                ) : null;
+              })()}
             </button>}
+
+            {(isAdmin || isUser) && (
+              <div className="relative">
+                <button
+                  onClick={() => setIsAccountMenuOpen(!isAccountMenuOpen)}
+                  className="p-3 rounded-full bg-slate-100 dark:bg-slate-800/50 hover:bg-slate-200 dark:hover:bg-slate-800 transition-colors shadow-sm flex items-center justify-center"
+                >
+                  <User size={20} className="text-slate-700 dark:text-slate-300" />
+                </button>
+
+                {isAccountMenuOpen && (
+                  <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsAccountMenuOpen(false)} />
+                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-black/90 backdrop-blur-md rounded-2xl shadow-xl border border-black/5 dark:border-white/10 overflow-hidden z-50">
+                    
+                    <button
+                      onClick={() => { toggleTheme(); setIsAccountMenuOpen(false); }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-slate-300"
+                    >
+                      {isDark ? <Sun size={16} /> : <Moon size={16} />}
+                      {isDark ? 'Light Mode' : 'Dark Mode'}
+                    </button>
+
+                    {isAdmin && (
+                      <div className="border-b border-t border-black/5 dark:border-white/10">
+                        <div className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                          Admin Settings
+                        </div>
+                        <div className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left text-slate-700 dark:text-slate-300">
+                          <Clock size={16} />
+                          <select
+                            value={reminderOffset}
+                            onChange={(e) => updateSettings(Number(e.target.value))}
+                            className="bg-transparent font-medium focus:outline-none appearance-none cursor-pointer flex-1"
+                          >
+                            <option value={180}>3h before</option>
+                            <option value={240}>4h before</option>
+                            <option value={300}>5h before</option>
+                          </select>
+                        </div>
+                        <button
+                          onClick={() => { setIsLogsOpen(true); setIsAccountMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-slate-300"
+                        >
+                          <Activity size={16} />
+                          Email Logs
+                        </button>
+                      </div>
+                    )}
+
+
+                    {isUser && !isAdmin && (
+                      <div className="border-b border-t border-black/5 dark:border-white/10">
+                        <button
+                          onClick={() => { setIsAboutModalOpen(true); setIsAccountMenuOpen(false); }}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors text-slate-700 dark:text-slate-300"
+                        >
+                          <Info size={16} />
+                          About App
+                        </button>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => {
+                        setIsAdmin(false);
+                        setIsUser(false);
+                        localStorage.removeItem('adminToken');
+                        localStorage.removeItem('userToken');
+                        setIsAccountMenuOpen(false);
+                        setUserAuthMode('login');
+                        setAuthMode('login');
+                        showToast("Success", "Logged out successfully", "success");
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-sm text-left hover:bg-red-50 dark:hover:bg-red-900/10 text-red-600 dark:text-red-400 transition-colors"
+                    >
+                      <LogOut size={16} />
+                      Log Out
+                    </button>
+                  </div>
+                  </>
+                )}
+              </div>
+            )}
+
 
             {selectedClassId && isAdmin ? (
               <div className="flex gap-2 ml-auto md:ml-0">
@@ -1843,133 +2362,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      
-      {/* Auth Modal */}
-      <AnimatePresence>
-        {isLoginOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setIsLoginOpen(false)}
-              className="absolute inset-0 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
-            />
-            
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="relative w-full max-w-sm max-h-[85vh] overflow-y-auto liquid-glass-heavy rounded-3xl p-5 sm:p-6 md:p-8 shadow-2xl text-slate-900 dark:text-white flex flex-col"
-            >
-              <div className="w-16 h-16 mx-auto mb-6 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center">
-                {authMode === 'login' ? <Lock size={32} /> : <KeyRound size={32} />}
-              </div>
-              <h2 className="text-2xl font-bold tracking-tight mb-6 text-center">
-                {authMode === 'login' ? 'Admin Login' : authMode === 'forgot' ? 'Reset Password' : 'New Password'}
-              </h2>
-
-              <form onSubmit={handleAuth} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">{authMode === 'login' ? 'Username / Email' : 'Email'}</label>
-                  <div className="relative">
-                    <User size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                    <input 
-                      required type="text"
-                      disabled={authMode === 'reset'}
-                      value={authForm.username} onChange={e => setAuthForm({...authForm, username: e.target.value})}
-                      className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 disabled:opacity-60 disabled:cursor-not-allowed"
-                      placeholder={authMode === 'login' ? 'admin' : 'admin@example.com'}
-                    />
-                  </div>
-                </div>
-
-                {authMode === 'login' && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Password</label>
-                    <div className="relative">
-                      <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                      <input 
-                        required type={showPassword ? "text" : "password"}
-                        value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})}
-                        className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                        placeholder="••••••••"
-                      />
-                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
-                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                    <div className="text-right mt-2">
-                      <button type="button" onClick={() => setAuthMode('forgot')} className="text-sm text-blue-600 hover:text-blue-700 font-medium">Forgot Password?</button>
-                    </div>
-                  </div>
-                )}
-
-                {authMode === 'reset' && (
-                  <>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">6-Digit Code</label>
-                      <div className="relative">
-                        <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                        <input 
-                          required type="text"
-                          value={authForm.code} onChange={e => setAuthForm({...authForm, code: e.target.value})}
-                          className="w-full pl-11 pr-4 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                          placeholder="123456"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">New Password</label>
-                      <div className="relative">
-                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                        <input 
-                          required type={showNewPassword ? "text" : "password"}
-                          value={authForm.newPassword} onChange={e => setAuthForm({...authForm, newPassword: e.target.value})}
-                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                          placeholder="••••••••"
-                        />
-                        <button type="button" onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
-                          {showNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 ml-1">Confirm Password</label>
-                      <div className="relative">
-                        <Lock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-                        <input 
-                          required type={showConfirmPassword ? "text" : "password"}
-                          value={authForm.confirmPassword} onChange={e => setAuthForm({...authForm, confirmPassword: e.target.value})}
-                          className="w-full pl-11 pr-11 py-3 rounded-2xl bg-white/90 dark:bg-black/50 border border-black/10 dark:border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50"
-                          placeholder="••••••••"
-                        />
-                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors">
-                          {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                <div className="pt-4 flex gap-3">
-                  <button type="button" disabled={isAuthenticating} onClick={() => {
-                      if (authMode !== 'login') setAuthMode('login');
-                      else setIsLoginOpen(false);
-                    }} 
-                    className="flex-1 py-3 rounded-2xl font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-900 dark:text-slate-200 transition-colors"
-                  >
-                    {authMode !== 'login' ? 'Back' : 'Cancel'}
-                  </button>
-                  <button type="submit" disabled={isAuthenticating} className="flex-1 py-3 rounded-2xl font-medium bg-blue-600 text-white shadow-md hover:bg-blue-700 transition-colors flex justify-center items-center gap-2 disabled:opacity-50">
-                    {isAuthenticating && <Sparkles size={16} className="animate-pulse" />}
-                    {authMode === 'login' ? 'Login' : authMode === 'forgot' ? 'Send Code' : 'Reset'}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
       {/* Form Modal */}
       <AnimatePresence>
         {isFormOpen && (
@@ -2384,7 +2776,203 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
+        
+        
+        
+        
+
+        
+        {isAboutModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsAboutModalOpen(false)} />
+            <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-white/20 overflow-hidden flex flex-col max-h-[90vh]">
+              <div className="p-4 sm:p-6 border-b border-black/5 dark:border-white/5 flex justify-between items-center bg-slate-50/50 dark:bg-slate-800/50 shrink-0">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Info size={20} className="text-purple-500" />
+                  About the App
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setIsAboutModalOpen(false)}
+                  className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto">
+                {appInfo ? (
+                  <div className="space-y-6">
+                    <div className="flex items-center gap-4 border-b border-black/5 dark:border-white/5 pb-4">
+                      <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-blue-500 rounded-2xl flex items-center justify-center shadow-lg text-white font-black text-2xl">
+                        A
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-bold">Acadamus</h3>
+                        <p className="text-slate-500 dark:text-slate-400">Version {appInfo.version}</p>
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h4 className="font-semibold text-lg mb-2">What's New</h4>
+                      <div className="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-xl whitespace-pre-wrap text-sm text-slate-700 dark:text-slate-300">
+                        {appInfo.changelog}
+                      </div>
+                    </div>
+                    
+                    <div>
+                      <h4 className="font-semibold text-lg mb-2">App Purpose</h4>
+                      <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                        {appInfo.description}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-center items-center h-32">
+                    <span className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin"></span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isRequestsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => { setIsRequestsModalOpen(false); setSelectedChatUser(null); }}
+              className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-3xl h-[100dvh] sm:h-[85vh] flex flex-col liquid-glass-heavy rounded-none sm:rounded-3xl overflow-hidden shadow-2xl text-slate-900 dark:text-white"
+            >
+              <div className="flex justify-between items-center p-6 border-b border-black/5 dark:border-white/5 shrink-0 bg-white/50 dark:bg-black/50 backdrop-blur-md">
+                <h2 className="text-xl font-bold tracking-tight flex items-center gap-2">
+                  {(isAdmin && selectedChatUser) ? (
+                    <button onClick={() => setSelectedChatUser(null)} className="mr-2 p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors">
+                      <span className="text-lg font-black">&larr;</span>
+                    </button>
+                  ) : (
+                    <MessageSquare size={20} className="text-purple-500" />
+                  )}
+                  {isAdmin ? (selectedChatUser ? `Chat with ${messages.find((m: any) => m.senderEmail === selectedChatUser)?.senderName || selectedChatUser}` : "User Chats") : "Chat with Admin"}
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setIsRequestsModalOpen(false); setSelectedChatUser(null); }}
+                    className="p-2 rounded-full hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+              </div>
+              
+              <div className="flex-1 overflow-hidden flex flex-col bg-white/30 dark:bg-black/30">
+                {isAdmin && !selectedChatUser ? (
+                  <div className="flex-1 flex flex-col">
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
+
+                    {(() => {
+                      const userEmails = Array.from(new Set(messages.map((m: any) => m.senderRole === 'user' ? m.senderEmail : m.receiverEmail).filter((e: any) => e !== 'admin')));
+                      if (userEmails.length === 0) {
+                        return (
+                          <div className="text-center py-10 text-slate-500 flex flex-col items-center">
+                            <MessageSquare className="mb-3 opacity-50" size={32} />
+                            <p>No chats found.</p>
+                          </div>
+                        );
+                      }
+                      return userEmails.map(email => {
+                        const userMsgs = messages.filter((m: any) => m.senderEmail === email || m.receiverEmail === email);
+                        const latestMsg = userMsgs[userMsgs.length - 1];
+                        const unreadCount = userMsgs.filter((m: any) => m.senderEmail === email && !m.readByAdmin).length;
+                        return (
+                          <div 
+                            key={email as string} 
+                            onClick={() => {
+                              setSelectedChatUser(email as string);
+                              if (unreadCount > 0) {
+                                customFetch('/api/messages/read', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ otherUserEmail: email }) })
+                                  .then(() => fetchMessages())
+                                  .catch(console.error);
+                              }
+                            }}
+                            className="p-4 rounded-2xl bg-white/50 dark:bg-black/50 hover:bg-white/80 dark:hover:bg-black/70 border border-black/5 dark:border-white/5 cursor-pointer transition-colors flex justify-between items-center"
+                          >
+                            <div>
+                              <div className="font-bold text-lg">{latestMsg.senderRole === 'user' ? latestMsg.senderName : (messages.find((m: any) => m.senderEmail === email)?.senderName || email)}</div>
+                              <div className="text-sm text-slate-500 truncate max-w-[200px] sm:max-w-md">{latestMsg.text}</div>
+                            </div>
+                            <div className="flex flex-col items-end gap-1">
+                              <span className="text-xs text-slate-400">{formatTimeAmPm(new Date(latestMsg.timestamp).toLocaleTimeString("en-US", {hour12: false}))}</span>
+                              {unreadCount > 0 && (
+                                <span className="bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{unreadCount}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col min-h-0">
+                    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 flex flex-col">
+                      {messages.filter((m: any) => isAdmin ? (m.senderEmail === selectedChatUser || m.receiverEmail === selectedChatUser) : true).length === 0 ? (
+                         <div className="text-center py-10 text-slate-500 m-auto flex flex-col items-center">
+                            <MessageSquare className="mb-3 opacity-50" size={32} />
+                            <p>Send a message to start chatting.</p>
+                            {!isAdmin && <p className="text-xs mt-2 opacity-70">Daily limit: 15 messages.</p>}
+                          </div>
+                      ) : (
+                        messages.filter((m: any) => isAdmin ? (m.senderEmail === selectedChatUser || m.receiverEmail === selectedChatUser) : true).map((msg: any) => {
+                          const isMine = isAdmin ? msg.senderRole === 'admin' : msg.senderRole === 'user';
+                          return (
+                            <div key={msg.id} className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`max-w-[80%] rounded-2xl p-3 sm:p-4 ${isMine ? 'bg-purple-600 text-white rounded-tr-sm' : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 rounded-tl-sm shadow-sm border border-black/5 dark:border-white/5'}`}>
+                                <div className="text-[15px] whitespace-pre-wrap leading-relaxed">{msg.text}</div>
+                                <div className={`text-[10px] mt-1.5 flex items-center justify-end gap-1 ${isMine ? 'text-purple-200' : 'text-slate-400'}`}>
+                                  {formatTimeAmPm(new Date(msg.timestamp).toLocaleTimeString("en-US", {hour12: false}))}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="p-4 bg-white/50 dark:bg-black/50 border-t border-black/5 dark:border-white/5 shrink-0">
+                      <form onSubmit={handleSendMessage} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={newMessageText}
+                          onChange={(e) => setNewMessageText(e.target.value)}
+                          placeholder="Type a message..."
+                          className="flex-1 bg-white dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-full px-5 py-3 focus:outline-none focus:border-purple-500 transition-colors"
+                          disabled={isSendingMessage}
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newMessageText.trim() || isSendingMessage}
+                          className="p-3 bg-purple-600 text-white rounded-full hover:bg-purple-700 transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          <Send size={20} />
+                        </button>
+                      </form>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+
         {isLogsOpen && (
+
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}

@@ -1,9 +1,7 @@
 import fs from 'fs';
 let content = fs.readFileSync('src/App.tsx', 'utf-8');
-
 content = content.replace(
-  'import { TimetableEntry, SchoolClass, EmailLog, ExamEntry } from "./types";',
-  'import { TimetableEntry, SchoolClass, EmailLog, ExamEntry, PaperType } from "./types";'
+  /MessageSquare, Send, Check, X \} from "lucide-react";/,
+  'MessageSquare, Send, Check, X, Info } from "lucide-react";'
 );
-
 fs.writeFileSync('src/App.tsx', content);
