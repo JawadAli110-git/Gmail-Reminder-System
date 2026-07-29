@@ -17,7 +17,7 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
 
-const APP_VERSION = "v2.0";
+const APP_VERSION = "v2.1";
 const CHANGELOG_MESSAGE = `🎉 App Updated to Version ${APP_VERSION}!
 
 What's New (User Features):
@@ -47,7 +47,7 @@ Enjoy the update!`;
       const now = new Date().toISOString();
       
       for (const email of userEmails) {
-          if (email === 'admin@example.com' || email === 'jawadali.syed.110@gmail.com') continue; // Skip admin
+          if (email === 'admin@example.com') continue; // Skip only the system admin account
           const msgData = {
             text: CHANGELOG_MESSAGE,
             senderEmail: 'admin@example.com',

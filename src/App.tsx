@@ -760,8 +760,8 @@ export default function App() {
   useEffect(() => {
     if (isAdmin || isUser) {
       fetchMessages();
-      // Poll every 30 seconds
-      const interval = setInterval(fetchMessages, 30000);
+      // Poll every 3 seconds
+      const interval = setInterval(fetchMessages, 3000);
       return () => clearInterval(interval);
     }
   }, [isAdmin, isUser]);
@@ -1745,7 +1745,7 @@ export default function App() {
                 {isAccountMenuOpen && (
                   <>
                   <div className="fixed inset-0 z-40" onClick={() => setIsAccountMenuOpen(false)} />
-                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-black/90 backdrop-blur-md rounded-2xl shadow-xl border border-black/5 dark:border-white/10 overflow-hidden z-50">
+                  <div className="absolute left-0 sm:left-auto sm:right-0 mt-2 w-48 bg-white dark:bg-black/90 backdrop-blur-md rounded-2xl shadow-xl border border-black/5 dark:border-white/10 overflow-hidden z-50">
                     
                     <button
                       onClick={() => { toggleTheme(); setIsAccountMenuOpen(false); }}
