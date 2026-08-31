@@ -11,6 +11,7 @@ import { Chatbot } from "./components/Chatbot";
 import { ExamForm } from "./components/ExamForm";
 import { TimetablePreview } from "./components/TimetablePreview";
 import { PaperSchedulePreview } from "./components/PaperSchedulePreview";
+import { TeacherAttendance } from "./components/TeacherAttendance";
 
 export const formatTimeAmPm = (time24?: string) => {
   if (!time24) return "";
@@ -137,7 +138,7 @@ export default function App() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [activeTab, setActiveTab] = useState<'home' | 'classes' | 'papers'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'classes' | 'papers' | 'teacher-attendance'>('home');
 
   
   const exportPaperScheduleToPDF = async (forTeachers: boolean = false) => {
@@ -290,7 +291,7 @@ export default function App() {
 
       doc.save(`${typeName}_Schedule.pdf`);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
       showToast("Error", "Failed to generate PDF", "error");
       triggerHapticError();
     }
@@ -668,7 +669,7 @@ export default function App() {
       const data = await res.json();
       if (data.reminderOffset) setReminderOffset(data.reminderOffset);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -682,7 +683,7 @@ export default function App() {
       setReminderOffset(offset);
       showToast("Success", "Reminder time updated.", "success");
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
       showToast("Error", "Failed to update settings.", "error");
     }
   };
@@ -694,7 +695,7 @@ export default function App() {
       const data = await res.json();
       setPaperTypes(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -704,7 +705,7 @@ export default function App() {
       const data = await res.json();
       setExams(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -714,7 +715,7 @@ export default function App() {
       const data = await res.json();
       setClassesList(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -724,7 +725,7 @@ export default function App() {
       const data = await res.json();
       setEntries(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     } finally {
       setIsLoading(false);
     }
@@ -736,7 +737,7 @@ export default function App() {
       const data = await res.json();
       setLogs(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -753,7 +754,7 @@ export default function App() {
       const data = await res.json();
       setMessages(data);
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -867,7 +868,7 @@ export default function App() {
         fetchPaperTypes();
       }
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
   };
 
@@ -891,7 +892,7 @@ export default function App() {
       if (selectedPaperTypeId === id) setSelectedPaperTypeId(null);
       await fetchExams();
     } catch (e) {
-      console.error(e);
+      if (e instanceof Error && e.message.includes("Failed to fetch")) { /* ignore network errors during poll */ } else { console.error(e); }
     }
     setDeleteConfirm(null);
   };
@@ -1612,6 +1613,11 @@ export default function App() {
                     Scheduled Papers
                   </div>
                 )
+              ) : activeTab === 'teacher-attendance' ? (
+                <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveTab('home')}>
+                  <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
+                  Teacher Attendance
+                </div>
               ) : (
                 <div className="flex items-center gap-4 cursor-pointer" onClick={() => setActiveTab('home')}>
                   <span className="text-blue-600 hover:opacity-80 transition-opacity">&larr;</span>
@@ -1623,7 +1629,7 @@ export default function App() {
               initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
               className="text-slate-500 dark:text-slate-400 mt-2 text-lg"
             >
-              {activeTab === 'home' ? "Select a module to view" : selectedClassId ? "Manage timetable for this class" : activeTab === 'papers' ? (selectedPaperTypeId ? "Manage papers for this type" : "Select a paper type to view") : "Select a class to view its schedule"}
+              {activeTab === 'home' ? "Select a module to view" : selectedClassId ? "Manage timetable for this class" : activeTab === 'papers' ? (selectedPaperTypeId ? "Manage papers for this type" : "Select a paper type to view") : activeTab === 'teacher-attendance' ? "Manage and track teacher attendance" : "Select a class to view its schedule"}
             </motion.p>
           </div>
           
@@ -1899,6 +1905,22 @@ export default function App() {
                           <p className="text-slate-500 dark:text-slate-400 text-lg">View and manage global exams</p>
                         </div>
                       </motion.div>
+
+                      {isAdmin && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+                          onClick={() => { triggerHaptic(); setActiveTab('teacher-attendance'); }}
+                          className="liquid-glass rounded-3xl p-10 group relative overflow-hidden text-slate-900 dark:text-white cursor-pointer hover:bg-white/40 dark:hover:bg-white/10 transition-colors border border-slate-200/50 dark:border-white/10 flex flex-col items-center justify-center text-center gap-6 h-72 shadow-sm hover:shadow-md"
+                        >
+                          <div className="p-6 rounded-3xl bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400 group-hover:scale-110 transition-transform">
+                            <User size={56} />
+                          </div>
+                          <div>
+                            <h3 className="text-3xl font-bold mb-3">Teacher Attendance</h3>
+                            <p className="text-slate-500 dark:text-slate-400 text-lg">Track and manage teacher attendance</p>
+                          </div>
+                        </motion.div>
+                      )}
                     </div>
                   ) : (
                     <div className="relative max-w-2xl mx-auto mb-8">
@@ -1975,6 +1997,10 @@ export default function App() {
                       </div>
                     )}
                   </>
+                )}
+
+                {activeTab === 'teacher-attendance' && isAdmin && (
+                  <TeacherAttendance classes={classesList} timetableEntries={entries} />
                 )}
 
                 {/* Global Exams Section */}

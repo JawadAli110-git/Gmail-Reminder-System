@@ -824,6 +824,35 @@ app.post("/api/users/reset-password", async (req, res) => {
    }
 });
 
+app.get("/api/teacher-attendance", authMiddleware, async (req, res) => {
+  try {
+    const { date, classId, month } = req.query;
+    const snapshot = await getDocs(collection(db, "teacher_attendance"));
+    let records = snapshot.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
+    if (date) records = records.filter(r => r.date === date);
+    if (classId) records = records.filter(r => r.classId === classId);
+    if (month) {
+       records = records.filter(r => r.date && r.date.startsWith(month));
+    }
+    res.json(records);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch attendance" });
+  }
+});
+
+app.post("/api/teacher-attendance", authMiddleware, async (req, res) => {
+  try {
+    const { date, classId, teachers } = req.body;
+    const id = `${date}_${classId}`;
+    await setDoc(doc(db, "teacher_attendance", id), {
+      date, classId, teachers, updatedAt: new Date().toISOString()
+    });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to save attendance" });
+  }
+});
+
 app.get("/api/logs", async (req, res) => {
   try {
     const snap = await getDocs(collection(db, "logs"));
@@ -975,6 +1004,8 @@ app.post("/api/chat", async (req, res) => {
     const currentClasses = await getClasses();
     const currentTimetable = await getTimetable();
     const currentExams = await getExams();
+    const attendanceSnapshot = await getDocs(collection(db, "teacher_attendance"));
+    const currentAttendance = attendanceSnapshot.docs.map(d => d.data());
     
     const now = new Date();
     const currentDateString = now.toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
@@ -1007,7 +1038,7 @@ ${JSON.stringify(currentClasses, null, 2)}
 Current Scheduled Classes Timetable:
 ${JSON.stringify(formattedTimetable, null, 2)}
 
-Current Scheduled Exams / Papers:
+Current Teacher Attendance Records:\n${JSON.stringify(currentAttendance, null, 2)}\n\nCurrent Scheduled Exams / Papers:
 ${JSON.stringify(formattedExams, null, 2)}`,
       },
       history: formattedHistory,

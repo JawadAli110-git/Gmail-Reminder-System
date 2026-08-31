@@ -1,0 +1,2 @@
+sed -i 's/const currentExams = await getExams();/const currentExams = await getExams();\n    const attendanceSnapshot = await db.collection("teacher_attendance").get();\n    const currentAttendance = attendanceSnapshot.docs.map(doc => doc.data());/g' server.ts
+sed -i 's/Current Scheduled Exams \/ Papers:/Current Teacher Attendance Records:\\n${JSON.stringify(currentAttendance, null, 2)}\\n\\nCurrent Scheduled Exams \/ Papers:/g' server.ts

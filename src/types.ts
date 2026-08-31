@@ -60,3 +60,22 @@ export interface ChatMessage {
   readByAdmin: boolean;
   readByUser: boolean;
 }
+
+export interface TeacherAttendanceRecord {
+  id: string; // e.g. "YYYY-MM-DD_classId"
+  date: string; // YYYY-MM-DD
+  classId: string;
+  teachers: {
+    teacherEmail: string; // use this as unique identifier
+    teacherName: string;
+    role?: 'Teacher' | 'TA';
+    originalTeacherEmail?: string;
+    originalTeacherName?: string;
+    taName?: string;
+    taEmail?: string;
+    subject: string;
+    status: 'Present' | 'Absent' | 'Late' | 'Replace';
+    replacementName?: string;
+    replacementSubject?: string;
+  }[];
+}
