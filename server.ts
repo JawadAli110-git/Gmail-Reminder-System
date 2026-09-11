@@ -514,13 +514,28 @@ async function checkConflict(teacherName: string, time: string, endTime: string 
   const timetable = await getTimetable();
   const exams = await getExams();
   
+  let existingEditedEntry: any = null;
+  if (excludeId) {
+    existingEditedEntry = timetable.find(e => e.id === excludeId);
+  }
+
   for (const entry of timetable) {
     if (excludeId && entry.id === excludeId) continue;
     
     const hasOverlap = entry.days.some((d: string) => days.includes(d) || d === "Daily" || days.includes("Daily"));
     if (hasOverlap && checkTimeOverlap(entry.time, entry.endTime, time, endTime)) {
       if (!allowConcurrent && entry.classId === classId) {
-        return `Clash detected! This class already has ${entry.subject} scheduled at this time.`;
+        // Was it already concurrent?
+        let alreadyConcurrent = false;
+        if (existingEditedEntry && existingEditedEntry.classId === classId) {
+           const hadOverlapBefore = entry.days.some((d: string) => existingEditedEntry.days.includes(d) || d === "Daily" || existingEditedEntry.days.includes("Daily"));
+           if (hadOverlapBefore && checkTimeOverlap(entry.time, entry.endTime, existingEditedEntry.time, existingEditedEntry.endTime)) {
+               alreadyConcurrent = true;
+           }
+        }
+        if (!alreadyConcurrent) {
+           return `Clash detected! This class already has ${entry.subject} scheduled at this time.`;
+        }
       }
       if (entry.teacherName === teacherName) {
         return `Clash detected! ${teacherName} is already teaching ${entry.subject} at ${entry.time}.`;
